@@ -13,12 +13,12 @@ Path: `extensions/generative-ui`
 
 Adds four OMP tools:
 
-- `visualize_read_me` returns design guidance for visual widgets.
-- `show_widget` renders HTML/SVG fragments in a cmux browser surface.
-- `save_widget_html` writes the latest widget fragment to disk.
-- `save_widget_screenshot` captures a live widget PNG through `cmux browser screenshot`.
+- `widget_read_guidelines` returns design guidance for visual widgets.
+- `widget_show` renders HTML/SVG fragments in a cmux browser surface.
+- `widget_save_html` writes the latest widget fragment to disk.
+- `widget_save_screenshot` captures a live widget PNG through `cmux browser screenshot`.
 
-`show_widget` streams generated markup into a local widget runtime, opens the runtime through the cmux Unix socket API with CLI fallback, and bridges browser-to-host RPC over a local WebSocket. Widgets may call `sendPrompt(text)` from explicit user actions; the extension queues those prompts with widget provenance through `pi.sendUserMessage(..., { deliverAs: "followUp" })`.
+`widget_show` streams generated markup into a local widget runtime, opens the runtime through the cmux Unix socket API with CLI fallback, and bridges browser-to-host RPC over a local WebSocket. Widgets may call `sendPrompt(text)` from explicit user actions; the extension queues those prompts with widget provenance through `pi.sendUserMessage(..., { deliverAs: "followUp" })`.
 
 Calls with the same widget title reuse the existing live surface. Set `new_surface: true` only when a separate browser
 surface is intentional.

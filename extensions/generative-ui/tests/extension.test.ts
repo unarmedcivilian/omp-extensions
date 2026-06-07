@@ -87,14 +87,14 @@ function contentMessages(surface: FakeSurface): HostToPage[] {
 }
 
 describe("generativeUiExtension", () => {
-  test("registers visualize_read_me and show_widget tools plus hidden prompt guidance", async () => {
+  test("registers widget-prefixed tools plus hidden prompt guidance", async () => {
     const pi = makeFakePi();
 
     generativeUiExtension(pi.api);
 
     expect(pi.labels).toEqual(["Generative UI"]);
-    expect(pi.tools.map(tool => tool.name)).toEqual(["visualize_read_me", "show_widget", "save_widget_html", "save_widget_screenshot"]);
-    expect(pi.tools.find(tool => tool.name === "show_widget")?.description).toContain("sendPrompt(text)");
+    expect(pi.tools.map(tool => tool.name)).toEqual(["widget_read_guidelines", "widget_show", "widget_save_html", "widget_save_screenshot"]);
+    expect(pi.tools.find(tool => tool.name === "widget_show")?.description).toContain("sendPrompt(text)");
 
     const beforeAgentStart = pi.handlers.get("before_agent_start");
     expect(beforeAgentStart).toBeFunction();
@@ -110,10 +110,10 @@ describe("generativeUiExtension", () => {
     extension(pi.api);
 
     expect(pi.labels).toEqual(["Generative UI"]);
-    expect(pi.tools.map(tool => tool.name)).toEqual(["visualize_read_me", "show_widget", "save_widget_html", "save_widget_screenshot"]);
+    expect(pi.tools.map(tool => tool.name)).toEqual(["widget_read_guidelines", "widget_show", "widget_save_html", "widget_save_screenshot"]);
   });
 
-  test("uses final show_widget title for prompts from a streamed widget session", async () => {
+  test("uses final widget_show title for prompts from a streamed widget session", async () => {
     const pi = makeFakePi();
     const surface = new FakeSurface();
     const extension = createGenerativeUiExtension({ openSurface: async () => surface, closeServer() {} });
@@ -123,11 +123,11 @@ describe("generativeUiExtension", () => {
       assistantMessageEvent: {
         type: "toolcall_start",
         contentIndex: 0,
-        partial: { content: [{ type: "toolCall", name: "show_widget", arguments: {} }] },
+        partial: { content: [{ type: "toolCall", name: "widget_show", arguments: {} }] },
       },
     });
 
-    const showWidget = pi.tools.find(tool => tool.name === "show_widget");
+    const showWidget = pi.tools.find(tool => tool.name === "widget_show");
     setTimeout(() => surface.emit("ready"), 0);
     await showWidget?.execute?.("call-1", {
       i_have_seen_read_me: true,
@@ -139,7 +139,7 @@ describe("generativeUiExtension", () => {
     expect(pi.sentMessages).toEqual([{ text: 'From widget "extension smoke test":\nConfirm the prompt path.', deliverAs: "followUp" }]);
   });
 
-  test("updates an existing live widget when show_widget is called again with the same title", async () => {
+  test("updates an existing live widget when widget_show is called again with the same title", async () => {
     const pi = makeFakePi();
     const surfaces: FakeSurface[] = [];
     const extension = createGenerativeUiExtension({
@@ -153,7 +153,7 @@ describe("generativeUiExtension", () => {
     });
     extension(pi.api);
 
-    const showWidget = pi.tools.find(tool => tool.name === "show_widget");
+    const showWidget = pi.tools.find(tool => tool.name === "widget_show");
     await showWidget?.execute?.("call-1", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>First pass</p>" });
     await showWidget?.execute?.("call-2", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>Second pass</p>" });
 
@@ -178,7 +178,7 @@ describe("generativeUiExtension", () => {
     });
     extension(pi.api);
 
-    const showWidget = pi.tools.find(tool => tool.name === "show_widget");
+    const showWidget = pi.tools.find(tool => tool.name === "widget_show");
     await showWidget?.execute?.("call-1", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>First surface</p>" });
     await showWidget?.execute?.("call-2", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>Second surface</p>", new_surface: true });
 
@@ -199,10 +199,10 @@ describe("generativeUiExtension", () => {
     });
     extension(pi.api);
 
-    const showWidget = pi.tools.find(tool => tool.name === "show_widget");
-    await pi.handlers.get("message_update")?.({ assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: { content: [{ type: "toolCall", name: "show_widget", arguments: {} }] } } });
+    const showWidget = pi.tools.find(tool => tool.name === "widget_show");
+    await pi.handlers.get("message_update")?.({ assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: { content: [{ type: "toolCall", name: "widget_show", arguments: {} }] } } });
     await showWidget?.execute?.("call-1", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>First streamed pass</p>" });
-    await pi.handlers.get("message_update")?.({ assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: { content: [{ type: "toolCall", name: "show_widget", arguments: {} }] } } });
+    await pi.handlers.get("message_update")?.({ assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: { content: [{ type: "toolCall", name: "widget_show", arguments: {} }] } } });
     await showWidget?.execute?.("call-2", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>Second streamed pass</p>" });
 
     expect(surfaces).toHaveLength(1);
@@ -227,12 +227,12 @@ describe("generativeUiExtension", () => {
     extension(pi.api);
 
     try {
-      await pi.tools.find(tool => tool.name === "show_widget")?.execute?.("show", {
+      await pi.tools.find(tool => tool.name === "widget_show")?.execute?.("show", {
         i_have_seen_read_me: true,
         title: "design_iteration",
         widget_code: "<section>Saved HTML</section>",
       });
-      const result = await pi.tools.find(tool => tool.name === "save_widget_html")?.execute?.("save-html", {
+      const result = await pi.tools.find(tool => tool.name === "widget_save_html")?.execute?.("save-html", {
         title: "design_iteration",
       }) as { content: Array<{ text: string }>; details: { title: string; path: string; bytes: number } };
 
@@ -265,12 +265,12 @@ describe("generativeUiExtension", () => {
     extension(pi.api);
 
     try {
-      await pi.tools.find(tool => tool.name === "show_widget")?.execute?.("show", {
+      await pi.tools.find(tool => tool.name === "widget_show")?.execute?.("show", {
         i_have_seen_read_me: true,
         title: "design_iteration",
         widget_code: "<section>Screenshot me</section>",
       });
-      const result = await pi.tools.find(tool => tool.name === "save_widget_screenshot")?.execute?.("save-shot", {
+      const result = await pi.tools.find(tool => tool.name === "widget_save_screenshot")?.execute?.("save-shot", {
         title: "design_iteration",
       }) as { details: { title: string; path: string; surface: string } };
 
@@ -303,17 +303,17 @@ describe("generativeUiExtension", () => {
     extension(pi.api);
 
     try {
-      await pi.tools.find(tool => tool.name === "show_widget")?.execute?.("show", {
+      await pi.tools.find(tool => tool.name === "widget_show")?.execute?.("show", {
         i_have_seen_read_me: true,
         title: "design_iteration",
         widget_code: "<section>Blank path</section>",
       });
 
-      await pi.tools.find(tool => tool.name === "save_widget_html")?.execute?.("save-html", {
+      await pi.tools.find(tool => tool.name === "widget_save_html")?.execute?.("save-html", {
         title: "design_iteration",
         output_path: "",
       });
-      await pi.tools.find(tool => tool.name === "save_widget_screenshot")?.execute?.("save-shot", {
+      await pi.tools.find(tool => tool.name === "widget_save_screenshot")?.execute?.("save-shot", {
         title: "design_iteration",
         output_path: "",
       });
@@ -330,7 +330,7 @@ describe("generativeUiExtension", () => {
     const extension = createGenerativeUiExtension({ openSurface: async () => new FakeSurface(), closeServer() {} });
     extension(pi.api);
 
-    await expect(pi.tools.find(tool => tool.name === "save_widget_html")?.execute?.("save-html", {
+    await expect(pi.tools.find(tool => tool.name === "widget_save_html")?.execute?.("save-html", {
       title: "missing_widget",
     })).rejects.toThrow('No active widget named "missing widget"');
   });

@@ -65,11 +65,11 @@ const DEFAULT_HEIGHT = 600;
 const installedApis = new WeakSet<object>();
 
 const HIDDEN_GUIDANCE = `[Generative UI extension active]
-Use show_widget when the user asks for visual content: charts, diagrams, interactive explainers, UI mockups, or generative art.
-Call visualize_read_me once before the first show_widget call, silently, and choose relevant modules: interactive, chart, mockup, art, diagram.
-show_widget renders HTML/SVG fragments in a cmux browser surface. Do not include DOCTYPE/html/head/body wrappers.
+Use widget_show when the user asks for visual content: charts, diagrams, interactive explainers, UI mockups, or generative art.
+Call widget_read_guidelines once before the first widget_show call, silently, and choose relevant modules: interactive, chart, mockup, art, diagram.
+widget_show renders HTML/SVG fragments in a cmux browser surface. Do not include DOCTYPE/html/head/body wrappers.
 Widgets may call sendPrompt(text) only from explicit user actions such as button clicks or clickable diagram nodes. sendPrompt queues a visible follow-up user message with widget provenance; never call it automatically on load, timers, animation frames, or data changes.
-Use save_widget_html or save_widget_screenshot when the user asks to persist a widget artifact. Both tools accept a widget title and optional output_path.
+Use widget_save_html or widget_save_screenshot when the user asks to persist a widget artifact. Both tools accept a widget title and optional output_path.
 Keep widgets focused and appropriately sized. Default size is 800x600; SVG code must start with <svg>. When iterating on a design, reuse the same title to update the existing cmux surface; set new_surface: true only when you intentionally want a separate window.`;
 
 export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}): (pi: ExtensionAPI) => void {
@@ -177,7 +177,7 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
 
       if (raw.type === "toolcall_start") {
         const block = raw.partial?.content?.[raw.contentIndex];
-        if (block?.type !== "toolCall" || block.name !== "show_widget") return;
+        if (block?.type !== "toolCall" || block.name !== "widget_show") return;
         const args = block.arguments ?? {};
         pendingIndex = raw.contentIndex;
         pendingTitle = { value: readTitle(args) ?? "" };
@@ -226,9 +226,9 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
     });
 
     pi.registerTool<typeof ReadMeParams, ReadMeDetails>({
-      name: "visualize_read_me",
-      label: "Read Guidelines",
-      description: "Returns design guidelines for show_widget. Call once before your first show_widget call. Do not mention this setup call to the user.",
+      name: "widget_read_guidelines",
+      label: "Read Widget Guidelines",
+      description: "Returns design guidelines for widget_show. Call once before your first widget_show call. Do not mention this setup call to the user.",
       parameters: ReadMeParams,
       async execute(_toolCallId, params) {
         const modules = params.modules as readonly Module[];
@@ -240,7 +240,7 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
     });
 
     const ShowWidgetParams = z.object({
-      i_have_seen_read_me: z.boolean().describe("Confirm you already called visualize_read_me in this conversation."),
+      i_have_seen_read_me: z.boolean().describe("Confirm you already called widget_read_guidelines in this conversation."),
       title: z.string().describe("Short snake_case identifier for this widget, used as the browser title and prompt provenance."),
       widget_code: z.string().describe("HTML or SVG fragment to render. For SVG: raw SVG starting with <svg>. For HTML: raw fragment, no DOCTYPE/html/head/body."),
       width: z.number().optional().describe("Preferred widget width in pixels. Default: 800."),
@@ -250,19 +250,19 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
     });
 
     pi.registerTool<typeof ShowWidgetParams, ShowWidgetDetails>({
-      name: "show_widget",
+      name: "widget_show",
       label: "Show Widget",
       description:
         "Render visual content — SVG graphics, diagrams, charts, or interactive HTML/JS widgets — in a cmux browser surface. " +
-        "Call visualize_read_me first. Widget code may call sendPrompt(text) from explicit user-triggered handlers. " +
+        "Call widget_read_guidelines first. Widget code may call sendPrompt(text) from explicit user-triggered handlers. " +
         "Calls with the same title update the existing live widget; set new_surface: true to force a separate cmux surface. " +
         "Use HTML/SVG fragments only; no DOCTYPE/html/head/body wrappers.",
       parameters: ShowWidgetParams,
       async execute(_toolCallId, params, signal) {
         if (!params.i_have_seen_read_me) {
-          throw new Error("You must call visualize_read_me before show_widget. Set i_have_seen_read_me: true after doing so.");
+          throw new Error("You must call widget_read_guidelines before widget_show. Set i_have_seen_read_me: true after doing so.");
         }
-        if (signal?.aborted) throw new Error("show_widget aborted before execution");
+        if (signal?.aborted) throw new Error("widget_show aborted before execution");
 
         const code = params.widget_code;
         const title = normalizeTitle(params.title);
@@ -274,7 +274,7 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
         let session: WidgetSession;
         if (pendingSession || pendingOpening) {
           const existing = await getPendingSession();
-          if (!existing) throw new Error("show_widget streaming session failed to open");
+          if (!existing) throw new Error("widget_show streaming session failed to open");
           session = existing;
           sessionsByTitle.set(title, session);
           clearPending();
@@ -285,7 +285,7 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
         if (signal) {
           if (signal.aborted) {
             session.close();
-            throw new Error("show_widget aborted before execution");
+            throw new Error("widget_show aborted before execution");
           }
           signal.addEventListener("abort", () => session.close(), { once: true });
         }
@@ -301,17 +301,17 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
 
 
     const SaveWidgetArtifactParams = z.object({
-      title: z.string().describe("Title of the live widget to save. Uses the same normalized title as show_widget."),
+      title: z.string().describe("Title of the live widget to save. Uses the same normalized title as widget_show."),
       output_path: z.string().optional().describe("File path to write. Defaults to artifacts/widgets/<title>.html or .png."),
     });
 
     pi.registerTool<typeof SaveWidgetArtifactParams, SaveWidgetHtmlDetails>({
-      name: "save_widget_html",
+      name: "widget_save_html",
       label: "Save Widget HTML",
-      description: "Save the latest HTML/SVG fragment for a live show_widget surface. Provide the widget title and optional output_path.",
+      description: "Save the latest HTML/SVG fragment for a live widget_show surface. Provide the widget title and optional output_path.",
       parameters: SaveWidgetArtifactParams,
       async execute(_toolCallId, params, signal) {
-        if (signal?.aborted) throw new Error("save_widget_html aborted before execution");
+        if (signal?.aborted) throw new Error("widget_save_html aborted before execution");
         const { title, session } = getSessionByRequestedTitle(params.title);
         const html = session.latestHTML;
         if (!html) throw new Error(`Widget "${title}" has no HTML to save`);
@@ -326,12 +326,12 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
     });
 
     pi.registerTool<typeof SaveWidgetArtifactParams, SaveWidgetScreenshotDetails>({
-      name: "save_widget_screenshot",
+      name: "widget_save_screenshot",
       label: "Save Widget Screenshot",
-      description: "Save a PNG screenshot of a live show_widget cmux browser surface. Provide the widget title and optional output_path.",
+      description: "Save a PNG screenshot of a live widget_show cmux browser surface. Provide the widget title and optional output_path.",
       parameters: SaveWidgetArtifactParams,
       async execute(_toolCallId, params, signal) {
-        if (signal?.aborted) throw new Error("save_widget_screenshot aborted before execution");
+        if (signal?.aborted) throw new Error("widget_save_screenshot aborted before execution");
         const { title, session } = getSessionByRequestedTitle(params.title);
         const surface = session.surface.surfaceRef;
         if (!surface) throw new Error(`Widget "${title}" does not have a cmux surface ref`);

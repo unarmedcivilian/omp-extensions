@@ -46,14 +46,14 @@ For `extensions/generative-ui`:
 - `src/runtime/**` is browser-side code. Rebuild `src/runtime.bundle.ts` after runtime changes.
 - `src/protocol.ts` defines the host/page message contract. Update both host and runtime tests when changing it.
 - Browser-originated WebSocket close must not call `surface.close`/`cmux close-surface`; only host-initiated cleanup should close cmux surfaces.
-- Repeated `show_widget` calls with the same normalized title should reuse the existing session unless
+- Repeated `widget_show` calls with the same normalized title should reuse the existing session unless
   `new_surface: true` is set.
 - `sendPrompt(text)` may only be exposed for explicit widget user actions and should route through
   `pi.sendUserMessage(..., { deliverAs: "followUp" })` with widget provenance.
 - Keep extension install idempotent for a given `ExtensionAPI` instance; duplicate registration can duplicate hidden
   guidance and streaming listeners.
-- `save_widget_html` should save the exact latest fragment tracked by `WidgetSession`; do not reconstruct markup from browser state.
-- `save_widget_screenshot` should target the tracked `surfaceRef` and use `cmux browser screenshot` semantics.
+- `widget_save_html` should save the exact latest fragment tracked by `WidgetSession`; do not reconstruct markup from browser state.
+- `widget_save_screenshot` should target the tracked `surfaceRef` and use `cmux browser screenshot` semantics.
 
 ## Build and test
 
