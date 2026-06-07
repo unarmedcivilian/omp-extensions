@@ -27,6 +27,8 @@ export class WidgetSession {
   #latestHTML = "";
   #hasContent = false;
   #flushTimer: ReturnType<typeof setTimeout> | undefined;
+  #flushPromise: Promise<void> | undefined;
+  #flushFinal = false;
   #closed = false;
 
   static async create(open: WidgetSurfaceOpener, opts: WidgetOpenOptions, signal?: AbortSignal): Promise<WidgetSession> {
@@ -41,10 +43,12 @@ export class WidgetSession {
     surface.on("closed", () => {
       this.#closed = true;
       this.#clearTimer();
+      ready.resolve();
     });
     surface.on("error", () => {
       this.#closed = true;
       this.#clearTimer();
+      ready.resolve();
     });
   }
 
@@ -88,9 +92,20 @@ export class WidgetSession {
 
   async #flush(final: boolean): Promise<void> {
     if (!this.#hasContent) return;
+    if (final) this.#flushFinal = true;
+    if (!this.#flushPromise) {
+      this.#flushPromise = this.#runFlush().finally(() => {
+        this.#flushPromise = undefined;
+        this.#flushFinal = false;
+      });
+    }
+    await this.#flushPromise;
+  }
+
+  async #runFlush(): Promise<void> {
     await this.ready;
     if (this.#closed) return;
-    this.rpc.push({ type: "content", html: this.#latestHTML, final });
+    this.rpc.push({ type: "content", html: this.#latestHTML, final: this.#flushFinal });
   }
 
   #clearTimer(): void {

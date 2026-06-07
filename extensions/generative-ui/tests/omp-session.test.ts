@@ -47,6 +47,44 @@ describe("WidgetSession", () => {
     expect(contentMessages(surface)).toEqual([{ html: "<div>".padEnd(40, "."), final: false }]);
   });
 
+  test("keeps one pending pre-ready partial flush", async () => {
+    const surface = new FakeSurface();
+    const session = new WidgetSession(surface);
+
+    session.onChunk("<p>first</p>".padEnd(40, "."));
+    await waitForDebounce();
+    session.onChunk("<p>second</p>".padEnd(40, "."));
+    await waitForDebounce();
+    session.onChunk("<p>third</p>".padEnd(40, "."));
+    await waitForDebounce();
+
+    expect(contentMessages(surface)).toEqual([]);
+
+    surface.emit("ready");
+    await Promise.resolve();
+
+    expect(contentMessages(surface)).toEqual([{ html: "<p>third</p>".padEnd(40, "."), final: false }]);
+  });
+
+
+  test("closing before ready settles a pending final flush", async () => {
+    const surface = new FakeSurface();
+    const session = new WidgetSession(surface);
+    const completed = Promise.withResolvers<boolean>();
+
+    void session.onComplete("<p>final</p>").then(() => completed.resolve(true));
+    await Promise.resolve();
+
+    session.close();
+
+    const result = await Promise.race([
+      completed.promise,
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 20)),
+    ]);
+
+    expect(result).toBe(true);
+    expect(contentMessages(surface)).toEqual([]);
+  });
   test("coalesces rapid chunks and sends only the latest partial", async () => {
     const surface = new FakeSurface();
     const session = new WidgetSession(surface);
