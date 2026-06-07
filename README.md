@@ -25,6 +25,16 @@ surface is intentional.
 
 Widget artifacts default to `artifacts/widgets/<title>.html` and `artifacts/widgets/<title>.png` when `output_path` is omitted.
 
+### `omp-chatgpt-links`
+
+Path: `extensions/chatgpt-links`
+
+Adds one OMP tool:
+
+- `chatgpt_import_conversation` opens a ChatGPT conversation URL or bare id in cmux browser, waits for load, extracts page text with `cmux browser get text`, and saves it to disk.
+
+The tool assumes the user is already logged into ChatGPT in the cmux browser profile. Conversation imports default to `artifacts/chatgpt/<conversation-id>.txt`.
+
 ## OMP extension API references
 
 Primary local references live in `reference/oh-my-pi/docs`:

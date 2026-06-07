@@ -8,6 +8,8 @@ This repo contains OMP extension packages for the Oh My Pi coding-agent harness.
 - Extension packages live under `extensions/*`.
 - `extensions/generative-ui` publishes `omp-generative-ui` and declares its OMP entry point in
   `package.json#omp.extensions`.
+- `extensions/chatgpt-links` publishes `omp-chatgpt-links` and declares its OMP entry point in
+  `package.json#omp.extensions`.
 - Local OMP API documentation is under `reference/oh-my-pi/docs`.
 
 ## OMP extension API rules
@@ -55,6 +57,18 @@ For `extensions/generative-ui`:
 - `widget_save_html` should save the exact latest fragment tracked by `WidgetSession`; do not reconstruct markup from browser state.
 - `widget_save_screenshot` should target the tracked `surfaceRef` and use `cmux browser screenshot` semantics.
 
+## ChatGPT links extension conventions
+
+For `extensions/chatgpt-links`:
+
+- `src/index.ts` owns OMP tool registration.
+- `src/importer.ts` owns URL/id normalization, login-wall detection, extraction validation, and file writes.
+- `src/cmux.ts` owns cmux browser CLI automation.
+- Assume the user is already logged into ChatGPT in the cmux browser profile; do not add login automation unless explicitly requested.
+- Leave the browser surface open when login is required or extraction returns no text so the user can inspect/fix the browser state.
+- Default saved conversations belong under `artifacts/chatgpt/<conversation-id>.txt`.
+
+
 ## Build and test
 
 Use Bun commands from the repo root unless noted.
@@ -63,6 +77,8 @@ Use Bun commands from the repo root unless noted.
 - Root workspace tests only: `bun test tests/*.test.ts`
 - Generative UI tests only: `bun --cwd extensions/generative-ui test`
 - Generative UI full check: `bun --cwd extensions/generative-ui check`
+- ChatGPT links tests only: `bun --cwd extensions/chatgpt-links test`
+- ChatGPT links full check: `bun --cwd extensions/chatgpt-links check`
 - Rebuild browser runtime bundle: `bun --cwd extensions/generative-ui run build:runtime`
 
 Before finishing changes:
