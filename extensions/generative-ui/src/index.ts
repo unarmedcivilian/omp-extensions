@@ -115,6 +115,10 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
       return join(artifactsDir, `${fileSafeTitle(title)}.${extension}`);
     }
 
+    function resolveOutputPath(requestedPath: string | undefined, title: string, extension: "html" | "png"): string {
+      return requestedPath && requestedPath.trim() ? requestedPath : defaultArtifactPath(title, extension);
+    }
+
     async function ensureParentDir(outputPath: string): Promise<void> {
       await mkdir(dirname(outputPath), { recursive: true });
     }
@@ -311,7 +315,7 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
         const { title, session } = getSessionByRequestedTitle(params.title);
         const html = session.latestHTML;
         if (!html) throw new Error(`Widget "${title}" has no HTML to save`);
-        const outputPath = params.output_path ?? defaultArtifactPath(title, "html");
+        const outputPath = resolveOutputPath(params.output_path, title, "html");
         await ensureParentDir(outputPath);
         const bytes = await Bun.write(outputPath, html);
         return {
@@ -331,7 +335,7 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
         const { title, session } = getSessionByRequestedTitle(params.title);
         const surface = session.surface.surfaceRef;
         if (!surface) throw new Error(`Widget "${title}" does not have a cmux surface ref`);
-        const outputPath = params.output_path ?? defaultArtifactPath(title, "png");
+        const outputPath = resolveOutputPath(params.output_path, title, "png");
         await ensureParentDir(outputPath);
         await screenshotSurface(surface, outputPath, signal);
         return {

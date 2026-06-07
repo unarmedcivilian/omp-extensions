@@ -283,6 +283,48 @@ describe("generativeUiExtension", () => {
     }
   });
 
+  test("treats blank save output paths as omitted", async () => {
+    const pi = makeFakePi();
+    const artifactsDir = await mkdtemp(join(tmpdir(), "omp-widget-blank-path-"));
+    const screenshots: Array<{ surface: string; outputPath: string }> = [];
+    const extension = createGenerativeUiExtension({
+      artifactsDir,
+      screenshotSurface: async (surface, outputPath) => {
+        screenshots.push({ surface, outputPath });
+        await writeFile(outputPath, "png");
+      },
+      openSurface: async () => {
+        const surface = new FakeSurface();
+        setTimeout(() => surface.emit("ready"), 0);
+        return surface;
+      },
+      closeServer() {},
+    });
+    extension(pi.api);
+
+    try {
+      await pi.tools.find(tool => tool.name === "show_widget")?.execute?.("show", {
+        i_have_seen_read_me: true,
+        title: "design_iteration",
+        widget_code: "<section>Blank path</section>",
+      });
+
+      await pi.tools.find(tool => tool.name === "save_widget_html")?.execute?.("save-html", {
+        title: "design_iteration",
+        output_path: "",
+      });
+      await pi.tools.find(tool => tool.name === "save_widget_screenshot")?.execute?.("save-shot", {
+        title: "design_iteration",
+        output_path: "",
+      });
+
+      expect(await readFile(join(artifactsDir, "design-iteration.html"), "utf8")).toBe("<section>Blank path</section>");
+      expect(screenshots).toEqual([{ surface: "surface:99", outputPath: join(artifactsDir, "design-iteration.png") }]);
+    } finally {
+      await rm(artifactsDir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects saving HTML for an unknown widget title", async () => {
     const pi = makeFakePi();
     const extension = createGenerativeUiExtension({ openSurface: async () => new FakeSurface(), closeServer() {} });
