@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { closeCmuxSurface, createCmuxRunner, openCmuxSurface, parseCmuxSurfaceRef, type CmuxRunner } from "../src/cmux.js";
+import {
+  CmuxSocketUnavailableError,
+  closeCmuxSurface,
+  createCmuxCliTransport,
+  createCmuxRunner,
+  createCmuxSocketRequester,
+  createCmuxSocketTransport,
+  createCmuxTransport,
+  openCmuxSurface,
+  parseCmuxSurfaceRef,
+  type CmuxRunner,
+  type CmuxTransport,
+} from "../src/cmux.js";
 
 describe("parseCmuxSurfaceRef", () => {
   test("accepts common cmux JSON shapes", () => {
@@ -39,6 +51,146 @@ describe("cmux surface commands", () => {
     await closeCmuxSurface("surface:42", runner);
 
     expect(calls).toEqual([["close-surface", "--surface", "surface:42"]]);
+  });
+});
+
+
+describe("cmux socket requester", () => {
+  test("sends newline-delimited JSON requests to the configured socket path", async () => {
+    const payloads: Array<{ payload: string; socketPath: string }> = [];
+    const request = createCmuxSocketRequester(
+      async (payload, socketPath) => {
+        payloads.push({ payload, socketPath });
+        return JSON.stringify({ id: "fixed", ok: true, result: { pong: true } });
+      },
+      { env: { CMUX_SOCKET_PATH: "/tmp/custom.sock" }, idFactory: () => "fixed" },
+    );
+
+    const result = await request("system.ping", {});
+
+    expect(result).toEqual({ pong: true });
+    expect(payloads).toEqual([{
+      socketPath: "/tmp/custom.sock",
+      payload: JSON.stringify({ id: "fixed", method: "system.ping", params: {} }) + "\n",
+    }]);
+  });
+
+  test("treats socket connection failures as fallback-eligible", async () => {
+    const request = createCmuxSocketRequester(
+      async () => {
+        const error = new Error("connect ENOENT") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      },
+      { env: { CMUX_SOCKET_PATH: "/tmp/missing.sock" }, idFactory: () => "fixed" },
+    );
+
+    await expect(request("system.ping", {})).rejects.toBeInstanceOf(CmuxSocketUnavailableError);
+  });
+
+  test("preserves application-level socket errors", async () => {
+    const request = createCmuxSocketRequester(
+      async () => JSON.stringify({ id: "fixed", ok: false, error: "method_not_found: Unknown method" }),
+      { env: { CMUX_SOCKET_PATH: "/tmp/cmux.sock" }, idFactory: () => "fixed" },
+    );
+
+    await expect(request("browser.open", {})).rejects.toThrow("method_not_found: Unknown method");
+  });
+});
+
+describe("cmux socket transport", () => {
+  test("opens browser surfaces through browser.open_split", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const transport = createCmuxSocketTransport(async (method, params) => {
+      calls.push({ method, params: params ?? {} });
+      return { surface_ref: "surface:42" };
+    }, { env: { CMUX_WORKSPACE_ID: "workspace-uuid", CMUX_SURFACE_ID: "surface-uuid" } });
+
+    const surface = await transport.openBrowserSurface("http://127.0.0.1:1234/widget/t");
+
+    expect(surface).toBe("surface:42");
+    expect(calls).toEqual([{
+      method: "browser.open_split",
+      params: {
+        url: "http://127.0.0.1:1234/widget/t",
+        focus: false,
+        workspace_id: "workspace-uuid",
+        surface_id: "surface-uuid",
+      },
+    }]);
+  });
+
+  test("closes surfaces through surface.close", async () => {
+    const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const transport = createCmuxSocketTransport(async (method, params) => {
+      calls.push({ method, params: params ?? {} });
+      return {};
+    }, { env: { CMUX_WORKSPACE_ID: "workspace-uuid" } });
+
+    await transport.closeSurface("surface:42");
+
+    expect(calls).toEqual([{
+      method: "surface.close",
+      params: { surface_id: "surface:42", workspace_id: "workspace-uuid" },
+    }]);
+  });
+});
+
+describe("cmux transport fallback", () => {
+  test("falls back to CLI when the socket is unavailable", async () => {
+    const calls: string[] = [];
+    const socket: CmuxTransport = {
+      async openBrowserSurface() {
+        calls.push("socket.open");
+        throw new CmuxSocketUnavailableError("missing socket");
+      },
+      async closeSurface() {
+        calls.push("socket.close");
+        throw new CmuxSocketUnavailableError("missing socket");
+      },
+    };
+    const cli: CmuxTransport = {
+      async openBrowserSurface() {
+        calls.push("cli.open");
+        return "surface:7";
+      },
+      async closeSurface() {
+        calls.push("cli.close");
+      },
+    };
+    const transport = createCmuxTransport({ socket, cli });
+
+    await expect(transport.openBrowserSurface("http://127.0.0.1:1234/widget/t")).resolves.toBe("surface:7");
+    await expect(transport.closeSurface("surface:7")).resolves.toBeUndefined();
+
+    expect(calls).toEqual(["socket.open", "cli.open", "socket.close", "cli.close"]);
+  });
+
+  test("does not fall back when the socket returns an application error", async () => {
+    const calls: string[] = [];
+    const socket: CmuxTransport = {
+      async openBrowserSurface() {
+        calls.push("socket.open");
+        throw new Error("method_not_found");
+      },
+      async closeSurface() {
+        calls.push("socket.close");
+      },
+    };
+    const cli: CmuxTransport = {
+      async openBrowserSurface() {
+        calls.push("cli.open");
+        return "surface:7";
+      },
+      async closeSurface() {
+        calls.push("cli.close");
+      },
+    };
+    const transport = createCmuxTransport({ socket, cli });
+
+    await expect(transport.openBrowserSurface("http://127.0.0.1:1234/widget/t")).rejects.toThrow("method_not_found");
+
+    expect(calls).toEqual(["socket.open"]);
   });
 });
 

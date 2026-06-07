@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getGuidelines, AVAILABLE_MODULES, type Module } from "./guidelines.js";
 import { attachAgentPrompt } from "./features/agent-prompt.js";
 import { attach as attachSvgSaver } from "./features/svg-saver.js";
-import { createCmuxRunner } from "./cmux.js";
+import { createCmuxTransport } from "./cmux.js";
 import { createCmuxWidgetOpener, LocalWidgetServer } from "./surface.js";
 import { WidgetSession, type WidgetSurfaceOpener } from "./session.js";
 import { RUNTIME_HTML } from "./runtime.bundle.js";
@@ -64,7 +64,7 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
     const activeSessions = new Set<WidgetSession>();
     const sessionsByTitle = new Map<string, WidgetSession>();
     const server = deps.openSurface ? undefined : new LocalWidgetServer(RUNTIME_HTML);
-    const openSurface = deps.openSurface ?? createCmuxWidgetOpener({ server: server!, runner: createCmuxRunner() });
+    const openSurface = deps.openSurface ?? createCmuxWidgetOpener({ server: server!, transport: createCmuxTransport() });
     const closeServer = deps.closeServer ?? (() => server?.close());
 
     let pendingIndex: number | undefined;

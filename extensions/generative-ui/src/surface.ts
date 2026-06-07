@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { closeCmuxSurface, openCmuxSurface, type CmuxRunner } from "./cmux.js";
+import type { CmuxTransport } from "./cmux.js";
 import type { HostToPage } from "./protocol.js";
 import { isPageToHost } from "./protocol.js";
 import type { WidgetOpenOptions, WidgetSurfaceLike, WidgetSurfaceOpener } from "./session.js";
@@ -180,7 +180,7 @@ function escapeHtml(value: string): string {
 
 export interface CreateCmuxWidgetOpenerOptions {
   server: WidgetServerLike;
-  runner: CmuxRunner;
+  transport: CmuxTransport;
   tokenFactory?: () => string;
 }
 
@@ -189,11 +189,11 @@ export function createCmuxWidgetOpener(options: CreateCmuxWidgetOpenerOptions): 
     const token = options.tokenFactory?.() ?? crypto.randomUUID();
     const surface = new CmuxWidgetSurface(token, (s, source) => {
       options.server.unregister(s.token);
-      if (source === "host" && s.surfaceRef) void closeCmuxSurface(s.surfaceRef, options.runner);
+      if (source === "host" && s.surfaceRef) void options.transport.closeSurface(s.surfaceRef);
     }, opts.title);
     const url = options.server.register(surface);
     try {
-      surface.surfaceRef = await openCmuxSurface(url.toString(), options.runner, signal);
+      surface.surfaceRef = await options.transport.openBrowserSurface(url.toString(), signal);
       return surface;
     } catch (error) {
       options.server.unregister(token);
