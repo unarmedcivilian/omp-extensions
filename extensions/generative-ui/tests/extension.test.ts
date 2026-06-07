@@ -1,0 +1,211 @@
+import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import generativeUiExtension, { createGenerativeUiExtension } from "../src/index.js";
+import type { HostToPage } from "../src/protocol.js";
+import type { WidgetSurfaceLike } from "../src/session.js";
+
+interface Chain {
+  describe(): Chain;
+  optional(): Chain;
+}
+
+interface ZLike {
+  object(shape: Record<string, unknown>): Chain;
+  array(value: unknown): Chain;
+  enum(values: readonly string[]): Chain;
+  string(): Chain;
+  boolean(): Chain;
+  number(): Chain;
+}
+
+interface TestTool {
+  name: string;
+  description: string;
+  execute?: (toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>;
+}
+
+interface FakePi {
+  tools: TestTool[];
+  handlers: Map<string, (event: unknown) => Promise<unknown> | unknown>;
+  labels: string[];
+  sentMessages: Array<{ text: string; deliverAs?: string }>;
+  api: ExtensionAPI;
+}
+
+class FakeSurface extends EventEmitter implements WidgetSurfaceLike {
+  surfaceRef = "surface:99";
+  sent: HostToPage[] = [];
+  closed = false;
+
+  send(msg: HostToPage): void {
+    this.sent.push(msg);
+  }
+
+  close(): void {
+    this.closed = true;
+    this.emit("closed");
+  }
+}
+
+function makeZ(): ZLike {
+  const chain: Chain = {
+    describe() { return this; },
+    optional() { return this; },
+  };
+  return {
+    object() { return chain; },
+    array() { return chain; },
+    enum() { return chain; },
+    string() { return chain; },
+    boolean() { return chain; },
+    number() { return chain; },
+  };
+}
+
+function makeFakePi(): FakePi {
+  const tools: TestTool[] = [];
+  const handlers = new Map<string, (event: unknown) => Promise<unknown> | unknown>();
+  const labels: string[] = [];
+  const sentMessages: Array<{ text: string; deliverAs?: string }> = [];
+  const api = {
+    zod: { z: makeZ() },
+    logger: { error() {}, warn() {}, info() {}, debug() {} },
+    setLabel(label: string) { labels.push(label); },
+    registerTool(tool: TestTool) { tools.push(tool); },
+    on(event: string, handler: (event: unknown) => Promise<unknown> | unknown) { handlers.set(event, handler); },
+    sendUserMessage(text: string, options?: { deliverAs?: string }) { sentMessages.push({ text, deliverAs: options?.deliverAs }); },
+  } as unknown as ExtensionAPI;
+  return { tools, handlers, labels, sentMessages, api };
+}
+
+function contentMessages(surface: FakeSurface): HostToPage[] {
+  return surface.sent.filter(msg => msg.type === "content");
+}
+
+describe("generativeUiExtension", () => {
+  test("registers visualize_read_me and show_widget tools plus hidden prompt guidance", async () => {
+    const pi = makeFakePi();
+
+    generativeUiExtension(pi.api);
+
+    expect(pi.labels).toEqual(["Generative UI"]);
+    expect(pi.tools.map(tool => tool.name)).toEqual(["visualize_read_me", "show_widget"]);
+    expect(pi.tools.find(tool => tool.name === "show_widget")?.description).toContain("sendPrompt(text)");
+
+    const beforeAgentStart = pi.handlers.get("before_agent_start");
+    expect(beforeAgentStart).toBeFunction();
+    const result = await beforeAgentStart?.({});
+    expect(result).toMatchObject({ message: { display: false } });
+  });
+
+  test("does not register duplicate tools when installed twice on the same API", () => {
+    const pi = makeFakePi();
+    const extension = createGenerativeUiExtension({ openSurface: async () => new FakeSurface(), closeServer() {} });
+
+    extension(pi.api);
+    extension(pi.api);
+
+    expect(pi.labels).toEqual(["Generative UI"]);
+    expect(pi.tools.map(tool => tool.name)).toEqual(["visualize_read_me", "show_widget"]);
+  });
+
+  test("uses final show_widget title for prompts from a streamed widget session", async () => {
+    const pi = makeFakePi();
+    const surface = new FakeSurface();
+    const extension = createGenerativeUiExtension({ openSurface: async () => surface, closeServer() {} });
+    extension(pi.api);
+
+    await pi.handlers.get("message_update")?.({
+      assistantMessageEvent: {
+        type: "toolcall_start",
+        contentIndex: 0,
+        partial: { content: [{ type: "toolCall", name: "show_widget", arguments: {} }] },
+      },
+    });
+
+    const showWidget = pi.tools.find(tool => tool.name === "show_widget");
+    setTimeout(() => surface.emit("ready"), 0);
+    await showWidget?.execute?.("call-1", {
+      i_have_seen_read_me: true,
+      title: "extension_smoke_test",
+      widget_code: "<button>ok</button>",
+    });
+    surface.emit("message", { type: "rpc-call", id: "r1", method: "agent.prompt", params: { text: "Confirm the prompt path." } });
+
+    expect(pi.sentMessages).toEqual([{ text: 'From widget "extension smoke test":\nConfirm the prompt path.', deliverAs: "followUp" }]);
+  });
+
+  test("updates an existing live widget when show_widget is called again with the same title", async () => {
+    const pi = makeFakePi();
+    const surfaces: FakeSurface[] = [];
+    const extension = createGenerativeUiExtension({
+      openSurface: async () => {
+        const surface = new FakeSurface();
+        surfaces.push(surface);
+        setTimeout(() => surface.emit("ready"), 0);
+        return surface;
+      },
+      closeServer() {},
+    });
+    extension(pi.api);
+
+    const showWidget = pi.tools.find(tool => tool.name === "show_widget");
+    await showWidget?.execute?.("call-1", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>First pass</p>" });
+    await showWidget?.execute?.("call-2", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>Second pass</p>" });
+
+    expect(surfaces).toHaveLength(1);
+    expect(contentMessages(surfaces[0])).toEqual([
+      { type: "content", html: "<p>First pass</p>", final: true },
+      { type: "content", html: "<p>Second pass</p>", final: true },
+    ]);
+  });
+
+  test("opens a fresh widget when new_surface is true even if the title matches", async () => {
+    const pi = makeFakePi();
+    const surfaces: FakeSurface[] = [];
+    const extension = createGenerativeUiExtension({
+      openSurface: async () => {
+        const surface = new FakeSurface();
+        surfaces.push(surface);
+        setTimeout(() => surface.emit("ready"), 0);
+        return surface;
+      },
+      closeServer() {},
+    });
+    extension(pi.api);
+
+    const showWidget = pi.tools.find(tool => tool.name === "show_widget");
+    await showWidget?.execute?.("call-1", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>First surface</p>" });
+    await showWidget?.execute?.("call-2", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>Second surface</p>", new_surface: true });
+
+    expect(surfaces).toHaveLength(2);
+  });
+
+  test("does not open a placeholder surface on streamed starts before final title is known", async () => {
+    const pi = makeFakePi();
+    const surfaces: FakeSurface[] = [];
+    const extension = createGenerativeUiExtension({
+      openSurface: async () => {
+        const surface = new FakeSurface();
+        surfaces.push(surface);
+        setTimeout(() => surface.emit("ready"), 0);
+        return surface;
+      },
+      closeServer() {},
+    });
+    extension(pi.api);
+
+    const showWidget = pi.tools.find(tool => tool.name === "show_widget");
+    await pi.handlers.get("message_update")?.({ assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: { content: [{ type: "toolCall", name: "show_widget", arguments: {} }] } } });
+    await showWidget?.execute?.("call-1", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>First streamed pass</p>" });
+    await pi.handlers.get("message_update")?.({ assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: { content: [{ type: "toolCall", name: "show_widget", arguments: {} }] } } });
+    await showWidget?.execute?.("call-2", { i_have_seen_read_me: true, title: "design_iteration", widget_code: "<p>Second streamed pass</p>" });
+
+    expect(surfaces).toHaveLength(1);
+    expect(contentMessages(surfaces[0])).toEqual([
+      { type: "content", html: "<p>First streamed pass</p>", final: true },
+      { type: "content", html: "<p>Second streamed pass</p>", final: true },
+    ]);
+  });
+});

@@ -1,0 +1,10 @@
+{
+  "name": "omp-extensions",
+  "private": true,
+  "type": "module",
+  "workspaces": ["extensions/*"],
+  "scripts": {
+    "test": "bun test tests/*.test.ts && bun --cwd extensions/generative-ui test",
+    "check": "bun test tests/*.test.ts && bun --cwd extensions/generative-ui check"
+  }
+}
