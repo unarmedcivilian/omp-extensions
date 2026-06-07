@@ -94,6 +94,7 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
     let pendingSession: WidgetSession | undefined;
     let pendingOpening: Promise<WidgetSession | undefined> | undefined;
     let pendingTitle: MutableTitle | undefined;
+    let hiddenGuidanceSent = false;
 
     pi.setLabel("Generative UI");
 
@@ -163,13 +164,17 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
       return session;
     }
 
-    pi.on("before_agent_start", async () => ({
-      message: {
-        customType: "generative-ui-guidance",
-        content: HIDDEN_GUIDANCE,
-        display: false,
-      },
-    }));
+    pi.on("before_agent_start", async () => {
+      if (hiddenGuidanceSent) return undefined;
+      hiddenGuidanceSent = true;
+      return {
+        message: {
+          customType: "generative-ui-guidance",
+          content: HIDDEN_GUIDANCE,
+          display: false,
+        },
+      };
+    });
 
     pi.on("message_update", async event => {
       const raw = event.assistantMessageEvent as AssistantStreamEvent | undefined;

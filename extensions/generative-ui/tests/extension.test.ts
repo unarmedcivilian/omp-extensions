@@ -99,7 +99,9 @@ describe("generativeUiExtension", () => {
     const beforeAgentStart = pi.handlers.get("before_agent_start");
     expect(beforeAgentStart).toBeFunction();
     const result = await beforeAgentStart?.({});
+    const duplicate = await beforeAgentStart?.({});
     expect(result).toMatchObject({ message: { display: false } });
+    expect(duplicate).toBeUndefined();
   });
 
   test("does not register duplicate tools when installed twice on the same API", () => {
