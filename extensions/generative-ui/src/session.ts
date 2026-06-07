@@ -48,6 +48,10 @@ export class WidgetSession {
     });
   }
 
+  get latestHTML(): string {
+    return this.#latestHTML;
+  }
+
   onChunk(html: string): void {
     if (this.#closed) return;
     if (!html || html.length < MIN_CHUNK_BYTES) return;

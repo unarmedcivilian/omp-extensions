@@ -182,6 +182,14 @@ export async function closeCmuxSurface(surface: string, runner: CmuxRunner): Pro
   }
 }
 
+export async function screenshotCmuxSurface(surface: string, outputPath: string, runner: CmuxRunner = createCmuxRunner(), signal?: AbortSignal): Promise<void> {
+  const result = await runner(["browser", "--surface", surface, "screenshot", "--out", outputPath], signal);
+  if (result.exitCode !== 0) {
+    const detail = result.stderr || result.stdout || `exit ${result.exitCode}`;
+    throw new Error(`cmux browser screenshot failed: ${detail}`);
+  }
+}
+
 export function createCmuxCliTransport(runner: CmuxRunner = createCmuxRunner()): CmuxTransport {
   return {
     openBrowserSurface(url, signal) {

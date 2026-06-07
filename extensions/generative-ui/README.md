@@ -6,10 +6,14 @@ Generative UI extension for OMP. It ports `pi-generative-ui` to OMP and renders 
 
 - `visualize_read_me` loads design guidance for widget generation.
 - `show_widget` streams an HTML/SVG fragment into a cmux browser surface.
+- `save_widget_html` writes the latest widget fragment to disk.
+- `save_widget_screenshot` captures a live widget PNG through `cmux browser screenshot`.
 
 Widgets can call `sendPrompt(text)` from explicit user-triggered handlers. The extension queues the text as a visible OMP follow-up user message with widget provenance.
 
 Calls to `show_widget` with the same `title` update the existing live cmux surface. Use `new_surface: true` when you intentionally want a separate window with the same title.
+
+Save tools accept `title` and optional `output_path`. Defaults are `artifacts/widgets/<title>.html` and `artifacts/widgets/<title>.png`.
 
 ## Install
 
@@ -21,4 +25,4 @@ Add this package as an OMP extension package. Its manifest exposes:
 }
 ```
 
-Requires `cmux` on `PATH` and Bun `>=1.3.14`.
+Requires cmux socket access or `cmux` on `PATH` for fallback, plus Bun `>=1.3.14`.

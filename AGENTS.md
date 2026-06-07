@@ -52,6 +52,8 @@ For `extensions/generative-ui`:
   `pi.sendUserMessage(..., { deliverAs: "followUp" })` with widget provenance.
 - Keep extension install idempotent for a given `ExtensionAPI` instance; duplicate registration can duplicate hidden
   guidance and streaming listeners.
+- `save_widget_html` should save the exact latest fragment tracked by `WidgetSession`; do not reconstruct markup from browser state.
+- `save_widget_screenshot` should target the tracked `surfaceRef` and use `cmux browser screenshot` semantics.
 
 ## Build and test
 

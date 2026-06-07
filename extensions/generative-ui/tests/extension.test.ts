@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import generativeUiExtension, { createGenerativeUiExtension } from "../src/index.js";
@@ -90,7 +93,7 @@ describe("generativeUiExtension", () => {
     generativeUiExtension(pi.api);
 
     expect(pi.labels).toEqual(["Generative UI"]);
-    expect(pi.tools.map(tool => tool.name)).toEqual(["visualize_read_me", "show_widget"]);
+    expect(pi.tools.map(tool => tool.name)).toEqual(["visualize_read_me", "show_widget", "save_widget_html", "save_widget_screenshot"]);
     expect(pi.tools.find(tool => tool.name === "show_widget")?.description).toContain("sendPrompt(text)");
 
     const beforeAgentStart = pi.handlers.get("before_agent_start");
@@ -107,7 +110,7 @@ describe("generativeUiExtension", () => {
     extension(pi.api);
 
     expect(pi.labels).toEqual(["Generative UI"]);
-    expect(pi.tools.map(tool => tool.name)).toEqual(["visualize_read_me", "show_widget"]);
+    expect(pi.tools.map(tool => tool.name)).toEqual(["visualize_read_me", "show_widget", "save_widget_html", "save_widget_screenshot"]);
   });
 
   test("uses final show_widget title for prompts from a streamed widget session", async () => {
@@ -207,5 +210,86 @@ describe("generativeUiExtension", () => {
       { type: "content", html: "<p>First streamed pass</p>", final: true },
       { type: "content", html: "<p>Second streamed pass</p>", final: true },
     ]);
+  });
+
+  test("saves the latest widget HTML to the default artifact path", async () => {
+    const pi = makeFakePi();
+    const artifactsDir = await mkdtemp(join(tmpdir(), "omp-widget-html-"));
+    const extension = createGenerativeUiExtension({
+      artifactsDir,
+      openSurface: async () => {
+        const surface = new FakeSurface();
+        setTimeout(() => surface.emit("ready"), 0);
+        return surface;
+      },
+      closeServer() {},
+    });
+    extension(pi.api);
+
+    try {
+      await pi.tools.find(tool => tool.name === "show_widget")?.execute?.("show", {
+        i_have_seen_read_me: true,
+        title: "design_iteration",
+        widget_code: "<section>Saved HTML</section>",
+      });
+      const result = await pi.tools.find(tool => tool.name === "save_widget_html")?.execute?.("save-html", {
+        title: "design_iteration",
+      }) as { content: Array<{ text: string }>; details: { title: string; path: string; bytes: number } };
+
+      const expectedPath = join(artifactsDir, "design-iteration.html");
+      expect(await readFile(expectedPath, "utf8")).toBe("<section>Saved HTML</section>");
+      expect(result.details).toEqual({ title: "design iteration", path: expectedPath, bytes: 29 });
+      expect(result.content[0]?.text).toContain(expectedPath);
+    } finally {
+      await rm(artifactsDir, { recursive: true, force: true });
+    }
+  });
+
+  test("saves a widget screenshot using its cmux surface", async () => {
+    const pi = makeFakePi();
+    const artifactsDir = await mkdtemp(join(tmpdir(), "omp-widget-shot-"));
+    const screenshots: Array<{ surface: string; outputPath: string }> = [];
+    const extension = createGenerativeUiExtension({
+      artifactsDir,
+      screenshotSurface: async (surface, outputPath) => {
+        screenshots.push({ surface, outputPath });
+        await writeFile(outputPath, "png");
+      },
+      openSurface: async () => {
+        const surface = new FakeSurface();
+        setTimeout(() => surface.emit("ready"), 0);
+        return surface;
+      },
+      closeServer() {},
+    });
+    extension(pi.api);
+
+    try {
+      await pi.tools.find(tool => tool.name === "show_widget")?.execute?.("show", {
+        i_have_seen_read_me: true,
+        title: "design_iteration",
+        widget_code: "<section>Screenshot me</section>",
+      });
+      const result = await pi.tools.find(tool => tool.name === "save_widget_screenshot")?.execute?.("save-shot", {
+        title: "design_iteration",
+      }) as { details: { title: string; path: string; surface: string } };
+
+      const expectedPath = join(artifactsDir, "design-iteration.png");
+      expect(screenshots).toEqual([{ surface: "surface:99", outputPath: expectedPath }]);
+      expect(await readFile(expectedPath, "utf8")).toBe("png");
+      expect(result.details).toEqual({ title: "design iteration", path: expectedPath, surface: "surface:99" });
+    } finally {
+      await rm(artifactsDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects saving HTML for an unknown widget title", async () => {
+    const pi = makeFakePi();
+    const extension = createGenerativeUiExtension({ openSurface: async () => new FakeSurface(), closeServer() {} });
+    extension(pi.api);
+
+    await expect(pi.tools.find(tool => tool.name === "save_widget_html")?.execute?.("save-html", {
+      title: "missing_widget",
+    })).rejects.toThrow('No active widget named "missing widget"');
   });
 });

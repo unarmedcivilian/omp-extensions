@@ -8,6 +8,7 @@ import {
   createCmuxSocketTransport,
   createCmuxTransport,
   openCmuxSurface,
+  screenshotCmuxSurface,
   parseCmuxSurfaceRef,
   type CmuxRunner,
   type CmuxTransport,
@@ -51,6 +52,18 @@ describe("cmux surface commands", () => {
     await closeCmuxSurface("surface:42", runner);
 
     expect(calls).toEqual([["close-surface", "--surface", "surface:42"]]);
+  });
+
+  test("captures a browser screenshot through cmux", async () => {
+    const calls: string[][] = [];
+    const runner: CmuxRunner = async args => {
+      calls.push([...args]);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+
+    await screenshotCmuxSurface("surface:42", "artifacts/widgets/demo.png", runner);
+
+    expect(calls).toEqual([["browser", "--surface", "surface:42", "screenshot", "--out", "artifacts/widgets/demo.png"]]);
   });
 });
 

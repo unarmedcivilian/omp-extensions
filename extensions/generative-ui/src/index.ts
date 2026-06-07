@@ -1,8 +1,10 @@
+import { mkdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getGuidelines, AVAILABLE_MODULES, type Module } from "./guidelines.js";
 import { attachAgentPrompt } from "./features/agent-prompt.js";
 import { attach as attachSvgSaver } from "./features/svg-saver.js";
-import { createCmuxTransport } from "./cmux.js";
+import { createCmuxRunner, createCmuxTransport, screenshotCmuxSurface } from "./cmux.js";
 import { createCmuxWidgetOpener, LocalWidgetServer } from "./surface.js";
 import { WidgetSession, type WidgetSurfaceOpener } from "./session.js";
 import { RUNTIME_HTML } from "./runtime.bundle.js";
@@ -18,6 +20,21 @@ interface ShowWidgetDetails {
   isSVG: boolean;
   surface?: string;
 }
+
+interface SaveWidgetHtmlDetails {
+  title: string;
+  path: string;
+  bytes: number;
+}
+
+interface SaveWidgetScreenshotDetails {
+  title: string;
+  path: string;
+  surface: string;
+}
+
+type ScreenshotSurface = (surface: string, outputPath: string, signal?: AbortSignal) => Promise<void>;
+
 
 interface ToolCallBlock {
   type: string;
@@ -39,6 +56,8 @@ interface MutableTitle {
 export interface GenerativeUiExtensionDeps {
   openSurface?: WidgetSurfaceOpener;
   closeServer?: () => void;
+  artifactsDir?: string;
+  screenshotSurface?: ScreenshotSurface;
 }
 
 const DEFAULT_WIDTH = 800;
@@ -50,6 +69,7 @@ Use show_widget when the user asks for visual content: charts, diagrams, interac
 Call visualize_read_me once before the first show_widget call, silently, and choose relevant modules: interactive, chart, mockup, art, diagram.
 show_widget renders HTML/SVG fragments in a cmux browser surface. Do not include DOCTYPE/html/head/body wrappers.
 Widgets may call sendPrompt(text) only from explicit user actions such as button clicks or clickable diagram nodes. sendPrompt queues a visible follow-up user message with widget provenance; never call it automatically on load, timers, animation frames, or data changes.
+Use save_widget_html or save_widget_screenshot when the user asks to persist a widget artifact. Both tools accept a widget title and optional output_path.
 Keep widgets focused and appropriately sized. Default size is 800x600; SVG code must start with <svg>. When iterating on a design, reuse the same title to update the existing cmux surface; set new_surface: true only when you intentionally want a separate window.`;
 
 export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}): (pi: ExtensionAPI) => void {
@@ -66,6 +86,9 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
     const server = deps.openSurface ? undefined : new LocalWidgetServer(RUNTIME_HTML);
     const openSurface = deps.openSurface ?? createCmuxWidgetOpener({ server: server!, transport: createCmuxTransport() });
     const closeServer = deps.closeServer ?? (() => server?.close());
+    const artifactsDir = deps.artifactsDir ?? join("artifacts", "widgets");
+    const screenshotSurface = deps.screenshotSurface ?? ((surface: string, outputPath: string, signal?: AbortSignal) => screenshotCmuxSurface(surface, outputPath, createCmuxRunner(), signal));
+
 
     let pendingIndex: number | undefined;
     let pendingSession: WidgetSession | undefined;
@@ -79,6 +102,21 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
       pendingSession = undefined;
       pendingOpening = undefined;
       pendingTitle = undefined;
+    }
+
+    function getSessionByRequestedTitle(requestedTitle: string): { title: string; session: WidgetSession } {
+      const title = normalizeTitle(requestedTitle);
+      const session = sessionsByTitle.get(title);
+      if (!session) throw new Error(`No active widget named "${title}"`);
+      return { title, session };
+    }
+
+    function defaultArtifactPath(title: string, extension: "html" | "png"): string {
+      return join(artifactsDir, `${fileSafeTitle(title)}.${extension}`);
+    }
+
+    async function ensureParentDir(outputPath: string): Promise<void> {
+      await mkdir(dirname(outputPath), { recursive: true });
     }
 
     function trackSession(session: WidgetSession, title: string | (() => string)): WidgetSession {
@@ -257,6 +295,51 @@ export function createGenerativeUiExtension(deps: GenerativeUiExtensionDeps = {}
       },
     });
 
+
+    const SaveWidgetArtifactParams = z.object({
+      title: z.string().describe("Title of the live widget to save. Uses the same normalized title as show_widget."),
+      output_path: z.string().optional().describe("File path to write. Defaults to artifacts/widgets/<title>.html or .png."),
+    });
+
+    pi.registerTool<typeof SaveWidgetArtifactParams, SaveWidgetHtmlDetails>({
+      name: "save_widget_html",
+      label: "Save Widget HTML",
+      description: "Save the latest HTML/SVG fragment for a live show_widget surface. Provide the widget title and optional output_path.",
+      parameters: SaveWidgetArtifactParams,
+      async execute(_toolCallId, params, signal) {
+        if (signal?.aborted) throw new Error("save_widget_html aborted before execution");
+        const { title, session } = getSessionByRequestedTitle(params.title);
+        const html = session.latestHTML;
+        if (!html) throw new Error(`Widget "${title}" has no HTML to save`);
+        const outputPath = params.output_path ?? defaultArtifactPath(title, "html");
+        await ensureParentDir(outputPath);
+        const bytes = await Bun.write(outputPath, html);
+        return {
+          content: [{ type: "text", text: `Saved widget "${title}" HTML to ${outputPath}.` }],
+          details: { title, path: outputPath, bytes },
+        };
+      },
+    });
+
+    pi.registerTool<typeof SaveWidgetArtifactParams, SaveWidgetScreenshotDetails>({
+      name: "save_widget_screenshot",
+      label: "Save Widget Screenshot",
+      description: "Save a PNG screenshot of a live show_widget cmux browser surface. Provide the widget title and optional output_path.",
+      parameters: SaveWidgetArtifactParams,
+      async execute(_toolCallId, params, signal) {
+        if (signal?.aborted) throw new Error("save_widget_screenshot aborted before execution");
+        const { title, session } = getSessionByRequestedTitle(params.title);
+        const surface = session.surface.surfaceRef;
+        if (!surface) throw new Error(`Widget "${title}" does not have a cmux surface ref`);
+        const outputPath = params.output_path ?? defaultArtifactPath(title, "png");
+        await ensureParentDir(outputPath);
+        await screenshotSurface(surface, outputPath, signal);
+        return {
+          content: [{ type: "text", text: `Saved widget "${title}" screenshot to ${outputPath}.` }],
+          details: { title, path: outputPath, surface },
+        };
+      },
+    });
     pi.on("session_shutdown", async () => {
       if (pendingSession) pendingSession.close();
       clearPending();
@@ -276,5 +359,10 @@ function normalizeTitle(title: string): string {
   return title.replace(/_/g, " ");
 }
 
+
+function fileSafeTitle(title: string): string {
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "widget";
+}
 const generativeUiExtension = createGenerativeUiExtension();
 export default generativeUiExtension;
