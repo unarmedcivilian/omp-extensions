@@ -15,7 +15,11 @@ class FakeBrowser implements BrowserAutomation {
   calls: string[] = [];
   surface = "surface:7";
 
-  constructor(readonly text: string) {}
+  #texts: Array<string | Error>;
+
+  constructor(text: string | Error | Array<string | Error>) {
+    this.#texts = Array.isArray(text) ? [...text] : [text];
+  }
 
   async open(url: string): Promise<string> {
     this.calls.push(`open:${url}`);
@@ -28,7 +32,9 @@ class FakeBrowser implements BrowserAutomation {
 
   async getText(surface: string, selector: string): Promise<string> {
     this.calls.push(`getText:${surface}:${selector}`);
-    return this.text;
+    const next = this.#texts.length > 1 ? this.#texts.shift()! : this.#texts[0];
+    if (next instanceof Error) throw next;
+    return next ?? "";
   }
 
   async close(surface: string): Promise<void> {
@@ -54,7 +60,7 @@ describe("ChatGPT conversation importer", () => {
 
   test("opens, extracts, saves, and closes successful imports", async () => {
     const artifactsDir = await mkdtemp(join(tmpdir(), "omp-chatgpt-import-"));
-    const text = "User\nHow do I test an extension?\nChatGPT\nUse a fake browser runner and assert saved output.";
+    const text = "Arrow Flight DuckDB worker prototype\n\nSaved as chat\nUser\nHow do I test an extension?\nChatGPT\nUse a fake browser runner and assert saved output.";
     const browser = new FakeBrowser(text);
 
     try {
@@ -69,7 +75,7 @@ describe("ChatGPT conversation importer", () => {
       expect(browser.calls).toEqual([
         "open:https://chatgpt.com/c/6a216a0f-58f4-83a8-9811-4cab2782a84f",
         "wait:surface:7:30000",
-        "getText:surface:7:body",
+        "getText:surface:7:main",
         "close:surface:7",
       ]);
       expect(result).toEqual({
@@ -79,6 +85,33 @@ describe("ChatGPT conversation importer", () => {
         bytes: Buffer.byteLength(text),
         surface: "surface:7",
       });
+    } finally {
+      await rm(artifactsDir, { recursive: true, force: true });
+    }
+  });
+
+  test("waits for ChatGPT to hydrate conversation text after load", async () => {
+    const artifactsDir = await mkdtemp(join(tmpdir(), "omp-chatgpt-delayed-text-"));
+    const text = "Arrow Flight DuckDB worker prototype\n\nSaved as chat\nUser\nSketch the concrete Go interfaces.\nChatGPT\nHere are the server and supervisor interfaces.";
+    const browser = new FakeBrowser([new Error('not_found: Element "main" not found or not visible'), "", "   ", text]);
+    try {
+      const result = await importChatGptConversation({
+        conversation: "6a216a0f-58f4-83a8-9811-4cab2782a84f",
+        artifactsDir,
+        browser,
+        waitTimeoutMs: 1000,
+      });
+
+      expect(await readFile(result.path, "utf8")).toBe(text);
+      expect(browser.calls).toEqual([
+        "open:https://chatgpt.com/c/6a216a0f-58f4-83a8-9811-4cab2782a84f",
+        "wait:surface:7:1000",
+        "getText:surface:7:main",
+        "getText:surface:7:main",
+        "getText:surface:7:main",
+        "getText:surface:7:main",
+        "close:surface:7",
+      ]);
     } finally {
       await rm(artifactsDir, { recursive: true, force: true });
     }
@@ -101,6 +134,7 @@ describe("ChatGPT conversation importer", () => {
     await expect(importChatGptConversation({
       conversation: "6a216a0f-58f4-83a8-9811-4cab2782a84f",
       browser,
+      waitTimeoutMs: 1,
     })).rejects.toBeInstanceOf(ChatGptExtractionError);
 
     expect(browser.calls).not.toContain("close:surface:7");

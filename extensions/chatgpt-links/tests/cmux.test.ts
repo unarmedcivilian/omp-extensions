@@ -55,22 +55,19 @@ describe("cmux browser socket automation", () => {
     }]);
   });
 
-  test("waits and extracts body text through socket browser methods", async () => {
+  test("does not use heavy socket snapshots for text extraction", async () => {
     const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
     const request: BrowserRpcRequester = async (method, params) => {
       calls.push({ method, params: params ?? {} });
-      if (method === "browser.eval") return { value: "conversation text" };
       return {};
     };
     const browser = createCmuxSocketBrowserAutomation(request, { env: { CMUX_WORKSPACE_ID: "workspace-uuid" } });
 
     await browser.waitForLoad("surface:7", 1234);
-    const text = await browser.getText("surface:7", "body");
+    await expect(browser.getText("surface:7", "body")).rejects.toBeInstanceOf(CmuxSocketUnavailableError);
 
-    expect(text).toBe("conversation text");
     expect(calls).toEqual([
       { method: "browser.wait", params: { surface_id: "surface:7", workspace_id: "workspace-uuid", load_state: "complete", timeout_ms: 1234 } },
-      { method: "browser.eval", params: { surface_id: "surface:7", workspace_id: "workspace-uuid", script: 'document.querySelector("body")?.innerText ?? ""' } },
     ]);
   });
 

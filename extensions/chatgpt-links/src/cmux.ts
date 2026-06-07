@@ -59,7 +59,7 @@ export function createCmuxSocketRequester(
       throw error;
     }
     const response = JSON.parse(raw) as { ok?: boolean; result?: unknown; error?: unknown };
-    if (response.ok !== true) throw new Error(String(response.error ?? "cmux socket request failed"));
+    if (response.ok !== true) throw new Error(formatCmuxRpcError(response.error));
     return response.result;
   };
 }
@@ -76,14 +76,8 @@ export function createCmuxSocketBrowserAutomation(
     async waitForLoad(surface, timeoutMs, signal) {
       await request("browser.wait", { surface_id: surface, ...callerParams(env, false), load_state: "complete", timeout_ms: timeoutMs }, signal);
     },
-    async getText(surface, selector, signal) {
-      const result = await request("browser.eval", { surface_id: surface, ...callerParams(env, false), script: `document.querySelector(${JSON.stringify(selector)})?.innerText ?? ""` }, signal);
-      if (typeof result === "string") return result;
-      if (result && typeof result === "object") {
-        const value = (result as { value?: unknown }).value;
-        if (typeof value === "string") return value;
-      }
-      return String(result ?? "");
+    async getText(_surface, _selector, _signal) {
+      throw new CmuxSocketUnavailableError("cmux socket text extraction is unavailable without heavyweight snapshots");
     },
     async close(surface, signal) {
       await request("surface.close", { surface_id: surface, ...callerParams(env, false) }, signal);
@@ -166,6 +160,17 @@ export function parseCmuxSurfaceRef(raw: unknown): string {
     }
   }
   throw new Error(`Unable to parse cmux surface ref from ${JSON.stringify(raw)}`);
+}
+
+
+function formatCmuxRpcError(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error === undefined || error === null) return "cmux socket request failed";
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }
 
 async function exchangeCmuxSocket(payload: string, socketPath: string, signal?: AbortSignal): Promise<string> {

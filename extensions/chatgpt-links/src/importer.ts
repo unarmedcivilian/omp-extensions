@@ -45,6 +45,10 @@ export class ChatGptExtractionError extends Error {
     this.name = "ChatGptExtractionError";
   }
 }
+const EXTRACTION_POLL_MS = 100;
+const CONVERSATION_SELECTOR = "main";
+
+
 
 const DEFAULT_WAIT_TIMEOUT_MS = 30_000;
 const DEFAULT_ARTIFACTS_DIR = join("artifacts", "chatgpt");
@@ -87,9 +91,7 @@ export async function importChatGptConversation(params: ImportChatGptConversatio
     throwIfAborted(params.signal);
     await browser.waitForLoad(surface, waitTimeoutMs, params.signal);
     throwIfAborted(params.signal);
-    const text = normalizeExtractedText(await browser.getText(surface, "body", params.signal));
-    if (looksLikeLoginWall(text)) throw new ChatGptLoginRequiredError(surface);
-    if (!text) throw new ChatGptExtractionError("ChatGPT conversation extraction returned no text", surface);
+    const text = await readConversationText(browser, surface, waitTimeoutMs, params.signal);
 
     await mkdir(dirname(outputPath), { recursive: true });
     const bytes = await Bun.write(outputPath, text);
@@ -102,13 +104,62 @@ export async function importChatGptConversation(params: ImportChatGptConversatio
   }
 }
 
+async function readConversationText(browser: BrowserAutomation, surface: string, timeoutMs: number, signal: AbortSignal | undefined): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    throwIfAborted(signal);
+    const text = normalizeExtractedText(await getConversationText(browser, surface, signal));
+    if (looksLikeLoginWall(text)) throw new ChatGptLoginRequiredError(surface);
+    if (isConversationTextReady(text)) return text;
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(EXTRACTION_POLL_MS, Math.max(0, deadline - Date.now())), signal);
+  } while (true);
+  throw new ChatGptExtractionError("ChatGPT conversation extraction returned no text", surface);
+}
+
+async function getConversationText(browser: BrowserAutomation, surface: string, signal: AbortSignal | undefined): Promise<string> {
+  try {
+    return await browser.getText(surface, CONVERSATION_SELECTOR, signal);
+  } catch (error) {
+    if (isTransientExtractionError(error)) return "";
+    throw error;
+  }
+}
+
+function isTransientExtractionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("not_found") || message.includes("not visible") || message.includes("Element");
+}
+
 function normalizeExtractedText(text: string): string {
   return text.replace(/\r\n/g, "\n").trim();
+}
+
+function isConversationTextReady(text: string): boolean {
+  return text.includes("Saved as chat") || text.includes("ChatGPT said:");
 }
 
 function looksLikeLoginWall(text: string): boolean {
   const lower = text.toLowerCase();
   return lower.includes("log in") && (lower.includes("sign up") || lower.includes("continue"));
+}
+
+function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    function onAbort(): void {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }
+
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
