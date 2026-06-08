@@ -44,17 +44,20 @@ For `extensions/generative-ui`:
 - `src/index.ts` owns OMP tool registration and session lifecycle wiring.
 - `src/session.ts` owns widget session state and content flushing.
 - `src/surface.ts` owns local runtime serving, WebSocket attachment, and cmux surface lifecycle.
-- `src/cmux.ts` owns the cmux transport. Prefer the Unix socket API for latency and keep CLI fallback for socket-unavailable environments.
+- `src/cmux.ts` owns the cmux transport. Prefer the Unix socket API for latency and keep CLI fallback for
+  socket-unavailable environments.
 - `src/runtime/**` is browser-side code. Rebuild `src/runtime.bundle.ts` after runtime changes.
 - `src/protocol.ts` defines the host/page message contract. Update both host and runtime tests when changing it.
-- Browser-originated WebSocket close must not call `surface.close`/`cmux close-surface`; only host-initiated cleanup should close cmux surfaces.
+- Browser-originated WebSocket close must not call `surface.close`/`cmux close-surface`; only host-initiated cleanup
+  should close cmux surfaces.
 - Repeated `widget_show` calls with the same normalized title should reuse the existing session unless
   `new_surface: true` is set.
 - `sendPrompt(text)` may only be exposed for explicit widget user actions and should route through
   `pi.sendUserMessage(..., { deliverAs: "followUp" })` with widget provenance.
 - Keep extension install idempotent for a given `ExtensionAPI` instance; duplicate registration can duplicate hidden
   guidance and streaming listeners.
-- `widget_save_html` should save the exact latest fragment tracked by `WidgetSession`; do not reconstruct markup from browser state.
+- `widget_save_html` should save the exact latest fragment tracked by `WidgetSession`; do not reconstruct markup from
+  browser state.
 - `widget_save_screenshot` should target the tracked `surfaceRef` and use `cmux browser screenshot` semantics.
 
 ## ChatGPT links extension conventions
@@ -63,12 +66,16 @@ For `extensions/chatgpt-links`:
 
 - `src/index.ts` owns OMP tool registration.
 - `src/importer.ts` owns URL/id normalization, login-wall detection, extraction validation, and file writes.
-- `src/cmux.ts` owns cmux browser automation. Prefer the Unix socket API for latency and keep CLI fallback for socket-unavailable environments.
-- Do not use `browser.snapshot` for text extraction in this extension; snapshot returns full page HTML/refs/text and can blow up harness memory on ChatGPT pages. Use CLI `cmux browser get text main` fallback until a lightweight socket text API is available.
-- Assume the user is already logged into ChatGPT in the cmux browser profile; do not add login automation unless explicitly requested.
-- Leave the browser surface open when login is required or extraction returns no text so the user can inspect/fix the browser state.
+- `src/cmux.ts` owns cmux browser automation. Prefer the Unix socket API for latency and keep CLI fallback for
+  socket-unavailable environments.
+- Do not use `browser.snapshot` for text extraction in this extension; snapshot returns full page HTML/refs/text and can
+  blow up harness memory on ChatGPT pages. Use CLI `cmux browser get text main` fallback until a lightweight socket text
+  API is available.
+- Assume the user is already logged into ChatGPT in the cmux browser profile; do not add login automation unless
+  explicitly requested.
+- Leave the browser surface open when login is required or extraction returns no text so the user can inspect/fix the
+  browser state.
 - Default saved conversations belong under `artifacts/chatgpt/<conversation-id>.txt`.
-
 
 ## Build and test
 

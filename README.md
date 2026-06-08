@@ -18,12 +18,16 @@ Adds four OMP tools:
 - `widget_save_html` writes the latest widget fragment to disk.
 - `widget_save_screenshot` captures a live widget PNG through `cmux browser screenshot`.
 
-`widget_show` streams generated markup into a local widget runtime, opens the runtime through the cmux Unix socket API with CLI fallback, and bridges browser-to-host RPC over a local WebSocket. Widgets may call `sendPrompt(text)` from explicit user actions; the extension queues those prompts with widget provenance through `pi.sendUserMessage(..., { deliverAs: "followUp" })`.
+`widget_show` streams generated markup into a local widget runtime, opens the runtime through the cmux Unix socket API
+with CLI fallback, and bridges browser-to-host RPC over a local WebSocket. Widgets may call `sendPrompt(text)` from
+explicit user actions; the extension queues those prompts with widget provenance through
+`pi.sendUserMessage(..., { deliverAs: "followUp" })`.
 
 Calls with the same widget title reuse the existing live surface. Set `new_surface: true` only when a separate browser
 surface is intentional.
 
-Widget artifacts default to `artifacts/widgets/<title>.html` and `artifacts/widgets/<title>.png` when `output_path` is omitted.
+Widget artifacts default to `artifacts/widgets/<title>.html` and `artifacts/widgets/<title>.png` when `output_path` is
+omitted.
 
 ### `omp-chatgpt-links`
 
@@ -31,9 +35,11 @@ Path: `extensions/chatgpt-links`
 
 Adds one OMP tool:
 
-- `chatgpt_import_conversation` opens a ChatGPT conversation URL or bare id in cmux browser via the Unix socket API with CLI fallback, waits for load, extracts page text, and saves it to disk.
+- `chatgpt_import_conversation` opens a ChatGPT conversation URL or bare id in cmux browser via the Unix socket API with
+  CLI fallback, waits for load, extracts page text, and saves it to disk.
 
-The tool assumes the user is already logged into ChatGPT in the cmux browser profile. Conversation imports default to `artifacts/chatgpt/<conversation-id>.txt`.
+The tool assumes the user is already logged into ChatGPT in the cmux browser profile. Conversation imports default to
+`artifacts/chatgpt/<conversation-id>.txt`.
 
 ## OMP extension API references
 
