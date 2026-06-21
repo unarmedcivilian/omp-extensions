@@ -41,6 +41,20 @@ Adds one OMP tool:
 The tool assumes the user is already logged into ChatGPT in the cmux browser profile. Conversation imports default to
 `artifacts/chatgpt/<conversation-id>.txt`.
 
+### `omp-dynamic-workflows`
+
+Path: `extensions/dynamic-workflows`
+
+Adds one OMP tool:
+
+- `workflow` executes deterministic JavaScript workflows that orchestrate isolated OMP subagents with `agent()`,
+  `parallel()`, and `pipeline()`.
+
+Workflow scripts must start with literal `export const meta = { name, description }`. Runtime `phase(...)` calls drive
+compact progress updates, and schema-based subagent output uses OMP's built-in `yield` tool.
+
+PI-to-OMP migration notes are documented in `extensions/dynamic-workflows/PORTING.md`.
+
 ## OMP extension API references
 
 Primary local references live in `reference/oh-my-pi/docs`:
@@ -74,16 +88,18 @@ Run all checks:
 bun run check
 ```
 
-Run only the generative UI extension checks:
+Run one extension check:
 
 ```sh
 bun --cwd extensions/generative-ui check
+bun --cwd extensions/chatgpt-links check
+bun --cwd extensions/dynamic-workflows check
 ```
 
-Run only extension tests:
+Run one extension's tests:
 
 ```sh
-bun --cwd extensions/generative-ui test
+bun --cwd extensions/dynamic-workflows test
 ```
 
 Rebuild the browser runtime bundle after changing files under `extensions/generative-ui/src/runtime`:
