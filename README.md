@@ -55,6 +55,12 @@ compact progress updates, and schema-based subagent output uses OMP's built-in `
 
 PI-to-OMP migration notes are documented in `extensions/dynamic-workflows/PORTING.md`.
 
+### `omp-subagent-preview`
+
+Path: `extensions/subagent-preview`
+
+Adds a live cmux browser dashboard for OMP task subagents. The dashboard opens on first subagent spawn, streams compact progress and transcript summaries, and can be controlled with `/subagent-preview`.
+
 ## OMP extension API references
 
 Primary local references live in `reference/oh-my-pi/docs`:
@@ -94,12 +100,14 @@ Run one extension check:
 bun --cwd extensions/generative-ui check
 bun --cwd extensions/chatgpt-links check
 bun --cwd extensions/dynamic-workflows check
+bun --cwd extensions/subagent-preview check
 ```
 
 Run one extension's tests:
 
 ```sh
 bun --cwd extensions/dynamic-workflows test
+bun --cwd extensions/subagent-preview test
 ```
 
 Rebuild the browser runtime bundle after changing files under `extensions/generative-ui/src/runtime`:
