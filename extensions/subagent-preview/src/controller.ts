@@ -5,6 +5,7 @@ export interface PreviewSurface {
   send(snapshot: PreviewSnapshot): void;
   close(): void;
   onBrowserClose?: (() => void) | undefined;
+  onBrowserReconnect?: (() => void) | undefined;
 }
 
 export interface PreviewControllerOptions {
@@ -29,8 +30,14 @@ export class PreviewController {
     this.currentSurface?.send(snapshot);
   }
 
-  handleBrowserClose(): void {
-    this.currentSurface = undefined;
+  handleBrowserClose(surface?: PreviewSurface): void {
+    if (!surface || this.currentSurface === surface) this.currentSurface = undefined;
+  }
+
+  handleBrowserReconnect(surface: PreviewSurface): void {
+    if (this.currentSurface) return;
+    this.currentSurface = surface;
+    if (this.#latestSnapshot) surface.send(this.#latestSnapshot);
   }
 
   async runCommand(rawArgs: string): Promise<void> {
@@ -81,7 +88,8 @@ export class PreviewController {
           surface.close();
           return;
         }
-        surface.onBrowserClose = () => this.handleBrowserClose();
+        surface.onBrowserClose = () => this.handleBrowserClose(surface);
+        surface.onBrowserReconnect = () => this.handleBrowserReconnect(surface);
         this.currentSurface = surface;
         if (sendLatest && this.#latestSnapshot) surface.send(this.#latestSnapshot);
       } catch (error) {

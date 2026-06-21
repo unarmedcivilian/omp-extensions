@@ -17,6 +17,7 @@ export type PreviewBrowserCloseSource = "host" | "browser";
 export class PreviewBrowserSurface {
   surfaceRef: string | undefined;
   onBrowserClose: (() => void) | undefined;
+  onBrowserReconnect: (() => void) | undefined;
   #socket: SurfaceSocketLike | undefined;
   #latestSnapshot: PreviewSnapshot | undefined;
   #closed = false;
@@ -35,8 +36,10 @@ export class PreviewBrowserSurface {
       socket.close();
       return;
     }
+    const wasDetached = this.#browserDetached;
     this.#socket = socket;
     this.#browserDetached = false;
+    if (wasDetached) this.onBrowserReconnect?.();
   }
 
   detachSocket(socket: SurfaceSocketLike): void {
