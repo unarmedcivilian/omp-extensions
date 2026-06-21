@@ -1,0 +1,102 @@
+import { describe, expect, test } from "bun:test";
+import { PreviewController, type PreviewSurface } from "../src/controller.js";
+import { createPreviewState, applyLifecycle, snapshotPreview } from "../src/model.js";
+
+function makeSnapshot(id = "A") {
+  const state = createPreviewState();
+  applyLifecycle(state, { id, agent: "task", agentSource: "bundled", status: "started", index: 0 });
+  return snapshotPreview(state);
+}
+
+function makeOpener(log: string[]) {
+  return async (): Promise<PreviewSurface> => {
+    const surface: PreviewSurface = {
+      surfaceRef: `surface:${log.length + 1}`,
+      closed: false,
+      sent: [],
+      send(snapshot) { this.sent.push(snapshot); },
+      close() { this.closed = true; log.push(`close:${this.surfaceRef}`); },
+      onBrowserClose: undefined,
+    };
+    log.push(`open:${surface.surfaceRef}`);
+    return surface;
+  };
+}
+
+describe("PreviewController", () => {
+  test("auto-opens on first spawn and sends snapshots", async () => {
+    const log: string[] = [];
+    const controller = new PreviewController({ openSurface: makeOpener(log), notify: () => {} });
+
+    await controller.handleSnapshot(makeSnapshot("A"));
+
+    expect(log).toEqual(["open:surface:1"]);
+    expect(controller.currentSurface?.sent).toHaveLength(1);
+  });
+
+  test("browser close detaches but later spawn reopens with existing state", async () => {
+    const log: string[] = [];
+    const controller = new PreviewController({ openSurface: makeOpener(log), notify: () => {} });
+
+    await controller.handleSnapshot(makeSnapshot("A"));
+    controller.handleBrowserClose();
+    await controller.handleSnapshot(makeSnapshot("B"));
+
+    expect(log).toEqual(["open:surface:1", "open:surface:2"]);
+    expect(controller.currentSurface?.sent.at(-1)).toMatchObject({ subagents: [{ id: "B" }] });
+  });
+
+  test("close command disables future auto-open", async () => {
+    const log: string[] = [];
+    const controller = new PreviewController({ openSurface: makeOpener(log), notify: () => {} });
+
+    await controller.handleSnapshot(makeSnapshot("A"));
+    await controller.runCommand("close");
+    await controller.handleSnapshot(makeSnapshot("B"));
+
+    expect(log).toEqual(["open:surface:1", "close:surface:1"]);
+  });
+
+  test("disable and enable control auto-open without closing existing surface", async () => {
+    const log: string[] = [];
+    const controller = new PreviewController({ openSurface: makeOpener(log), notify: () => {} });
+
+    await controller.runCommand("disable");
+    await controller.handleSnapshot(makeSnapshot("A"));
+    await controller.runCommand("enable");
+    await controller.handleSnapshot(makeSnapshot("B"));
+
+    expect(log).toEqual(["open:surface:1"]);
+  });
+
+  test("no-args command opens without changing disabled state", async () => {
+    const log: string[] = [];
+    const controller = new PreviewController({ openSurface: makeOpener(log), notify: () => {} });
+
+    await controller.runCommand("disable");
+    await controller.runCommand("");
+    await controller.handleSnapshot(makeSnapshot("A"));
+
+    expect(log).toEqual(["open:surface:1"]);
+  });
+
+  test("dispose closes a surface that resolves after disposal", async () => {
+    const log: string[] = [];
+    const deferred = Promise.withResolvers<PreviewSurface>();
+    const controller = new PreviewController({ openSurface: async () => deferred.promise, notify: () => {} });
+    const opening = controller.handleSnapshot(makeSnapshot("A"));
+
+    const disposal = controller.dispose();
+    deferred.resolve({
+      surfaceRef: "surface:late",
+      closed: false,
+      sent: [],
+      send(snapshot) { this.sent.push(snapshot); },
+      close() { this.closed = true; log.push(`close:${this.surfaceRef}`); },
+    });
+    await Promise.all([opening, disposal]);
+
+    expect(log).toEqual(["close:surface:late"]);
+    expect(controller.currentSurface).toBeUndefined();
+  });
+});
