@@ -66,4 +66,30 @@ describe("runtime bridge", () => {
     expect(copied[0]).toContain("Done");
     expect(socket.sent.map(JSON.parse)).toEqual([{ type: "ready" }]);
   });
+
+  test("pending agents are expanded and followed as active", () => {
+    const socket = new FakeSocket();
+    const queried: string[] = [];
+    const root = {
+      innerHTML: "",
+      querySelector(selector: string) {
+        queried.push(selector);
+        return { scrollIntoView() {} };
+      },
+    };
+    installRuntime({ socket, root });
+    socket.message({
+      type: "snapshot",
+      snapshot: {
+        updatedAt: 1,
+        counts: { pending: 1, running: 0, completed: 0, failed: 0, aborted: 0 },
+        subagents: [
+          { id: "P", index: 0, agent: "task", agentSource: "bundled", status: "pending", description: "Queued", recentTools: [], recentOutput: [], toolCount: 0, tokens: 0, cost: 0, durationMs: 0, nestedTaskCount: 0, transcript: [{ kind: "assistant", text: "queued details", truncated: false }], updatedAt: 1 },
+        ],
+      },
+    });
+
+    expect(root.innerHTML).toContain("queued details");
+    expect(queried.at(-1)).toContain("pending");
+  });
 });

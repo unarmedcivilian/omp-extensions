@@ -20,6 +20,7 @@ export class PreviewBrowserSurface {
   #socket: SurfaceSocketLike | undefined;
   #latestSnapshot: PreviewSnapshot | undefined;
   #closed = false;
+  #browserDetached = false;
 
   constructor(readonly token: string, readonly onClose: (surface: PreviewBrowserSurface, source: PreviewBrowserCloseSource) => void) {}
 
@@ -35,10 +36,16 @@ export class PreviewBrowserSurface {
       return;
     }
     this.#socket = socket;
+    this.#browserDetached = false;
   }
 
   detachSocket(socket: SurfaceSocketLike): void {
     if (this.#socket === socket) this.#socket = undefined;
+  }
+
+  detachForBrowserDisconnect(socket: SurfaceSocketLike): void {
+    this.detachSocket(socket);
+    this.#notifyBrowserDetached();
   }
 
   receiveFromBrowser(data: string): void {
@@ -60,13 +67,19 @@ export class PreviewBrowserSurface {
     this.#close("browser");
   }
 
+  #notifyBrowserDetached(): void {
+    if (this.#browserDetached) return;
+    this.#browserDetached = true;
+    this.onBrowserClose?.();
+  }
+
   #close(source: PreviewBrowserCloseSource): void {
     if (this.#closed) return;
     this.#closed = true;
     const socket = this.#socket;
     this.#socket = undefined;
     if (source === "host") socket?.close();
-    if (source === "browser") this.onBrowserClose?.();
+    if (source === "browser") this.#notifyBrowserDetached();
     this.onClose(this, source);
   }
 }

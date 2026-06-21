@@ -77,7 +77,7 @@ export class LocalPreviewServer implements PreviewServerLike {
           const { token, socket } = ws.data as WebSocketData;
           const surface = this.#surfaces.get(token);
           if (!surface || !socket) return;
-          surface.detachSocket(socket);
+          surface.detachForBrowserDisconnect(socket);
           this.#scheduleBrowserClose(token, surface);
         },
       },

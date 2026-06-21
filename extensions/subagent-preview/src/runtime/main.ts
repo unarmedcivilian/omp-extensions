@@ -1,6 +1,8 @@
 import type { PreviewSnapshot } from "../model.js";
 import { renderDashboard, type DashboardFilter } from "./dashboard.js";
 
+const ACTIVE_STATUSES = new Set(["pending", "running"]);
+
 export interface RuntimeSocketLike {
   readyState: number;
   send(data: string): void;
@@ -42,16 +44,18 @@ export function installRuntime(options: RuntimeInstallOptions = {}): void {
   let followActive = true;
   const clipboard = options.clipboard ?? globalThis.navigator?.clipboard;
 
+  const activeSelector = '[data-status="pending"],[data-status="running"]';
+
   function syncExpansion(snapshot: PreviewSnapshot): void {
     for (const agent of snapshot.subagents) {
-      if (agent.status === "running" && !userCollapsed.has(agent.id)) expanded.add(agent.id);
-      if (agent.status !== "running" && !userExpanded.has(agent.id)) expanded.delete(agent.id);
+      if (ACTIVE_STATUSES.has(agent.status) && !userCollapsed.has(agent.id)) expanded.add(agent.id);
+      if (!ACTIVE_STATUSES.has(agent.status) && !userExpanded.has(agent.id)) expanded.delete(agent.id);
     }
   }
 
   function render(): void {
     root.innerHTML = latest ? renderDashboard(latest, { filter, expanded }) : `<p class="empty">Waiting for subagents...</p>`;
-    if (followActive) root.querySelector?.('[data-status="running"]')?.scrollIntoView?.();
+    if (followActive) root.querySelector?.(activeSelector)?.scrollIntoView?.();
   }
 
   root.addEventListener?.("click", event => {

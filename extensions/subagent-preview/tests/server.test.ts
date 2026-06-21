@@ -75,6 +75,33 @@ describe("LocalPreviewServer", () => {
     }
   });
 
+  test("websocket close detaches controller immediately while preserving reconnect token", async () => {
+    const server = new LocalPreviewServer("<!doctype html><title>Subagent Preview</title>");
+    const detached = Promise.withResolvers<void>();
+    const surface = new PreviewBrowserSurface("tok", () => {});
+    surface.onBrowserClose = () => detached.resolve();
+    try {
+      const url = server.register(surface);
+      surface.send({ subagents: [], counts: { pending: 0, running: 1, completed: 0, failed: 0, aborted: 0 }, updatedAt: 3 });
+      const first = new WebSocket(new URL("/ws/tok", server.baseUrl));
+      await waitForOpen(first);
+      const closed = waitForClose(first);
+      first.close();
+      await closed;
+      await detached.promise;
+
+      expect((await fetch(url)).status).toBe(200);
+      const second = new WebSocket(new URL("/ws/tok", server.baseUrl));
+      const received = waitForMessage(second);
+      await waitForOpen(second);
+      second.send(JSON.stringify({ type: "ready" }));
+      await expect(received).resolves.toMatchObject({ type: "snapshot", snapshot: { updatedAt: 3 } });
+      second.close();
+    } finally {
+      server.close();
+    }
+  });
+
   test("websocket close can mark the browser surface closed after grace", async () => {
     const server = new LocalPreviewServer("<!doctype html><title>Subagent Preview</title>", { browserCloseGraceMs: 0 });
     const closed: string[] = [];
