@@ -39,4 +39,15 @@ describe("PreviewBrowserSurface", () => {
     expect(server.unregistered).toEqual(["fixed"]);
     expect(calls).toEqual(["open:http://127.0.0.1:1234/subagent-preview/fixed"]);
   });
+
+  test("browser close emits detached and final close callbacks", () => {
+    const events: string[] = [];
+    const surface = new PreviewBrowserSurface("tok", (_surface, source) => events.push(source));
+    surface.onBrowserClose = () => events.push("detached");
+    surface.onBrowserClosed = () => events.push("final");
+
+    surface.browserClosed();
+
+    expect(events).toEqual(["detached", "final", "browser"]);
+  });
 });
