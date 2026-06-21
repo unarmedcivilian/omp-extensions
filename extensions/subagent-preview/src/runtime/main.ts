@@ -37,8 +37,17 @@ export function installRuntime(options: RuntimeInstallOptions = {}): void {
   let latest: PreviewSnapshot | undefined;
   let filter: DashboardFilter = "all";
   const expanded = new Set<string>();
+  const userExpanded = new Set<string>();
+  const userCollapsed = new Set<string>();
   let followActive = true;
   const clipboard = options.clipboard ?? globalThis.navigator?.clipboard;
+
+  function syncExpansion(snapshot: PreviewSnapshot): void {
+    for (const agent of snapshot.subagents) {
+      if (agent.status === "running" && !userCollapsed.has(agent.id)) expanded.add(agent.id);
+      if (agent.status !== "running" && !userExpanded.has(agent.id)) expanded.delete(agent.id);
+    }
+  }
 
   function render(): void {
     root.innerHTML = latest ? renderDashboard(latest, { filter, expanded }) : `<p class="empty">Waiting for subagents...</p>`;
@@ -51,8 +60,15 @@ export function installRuntime(options: RuntimeInstallOptions = {}): void {
     if (!data?.action) return;
     if (data.action === "filter" && data.status) filter = data.status as DashboardFilter;
     if (data.action === "toggle" && data.agentId) {
-      if (expanded.has(data.agentId)) expanded.delete(data.agentId);
-      else expanded.add(data.agentId);
+      if (expanded.has(data.agentId)) {
+        expanded.delete(data.agentId);
+        userCollapsed.add(data.agentId);
+        userExpanded.delete(data.agentId);
+      } else {
+        expanded.add(data.agentId);
+        userExpanded.add(data.agentId);
+        userCollapsed.delete(data.agentId);
+      }
     }
     if (data.action === "copy" && data.agentId && latest) {
       const agent = latest.subagents.find(item => item.id === data.agentId);
@@ -67,6 +83,7 @@ export function installRuntime(options: RuntimeInstallOptions = {}): void {
     const data = typeof (event as { data?: unknown }).data === "string" ? JSON.parse((event as { data: string }).data) : undefined;
     if (data?.type === "snapshot") {
       latest = data.snapshot;
+      syncExpansion(latest);
       render();
     }
   });

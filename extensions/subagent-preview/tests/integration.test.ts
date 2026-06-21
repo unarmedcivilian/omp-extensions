@@ -92,4 +92,28 @@ describe("subagent preview runtime wiring", () => {
     expect(JSON.stringify(sent.at(-1))).toContain("summary from /tmp/a.jsonl");
     await runtime.shutdown();
   });
+
+  test("terminal first lifecycle event still drains transcript summaries", async () => {
+    const eventBus = makeEventBus();
+    const sent: unknown[] = [];
+    const runtime = createSubagentPreviewRuntime({
+      eventBus,
+      debounceMs: 0,
+      transcriptPollMs: 0,
+      openSurface: async () => ({ send(snapshot) { sent.push(snapshot); }, close() {} }),
+      notify: () => {},
+      createTranscriptTailer: path => ({
+        readNew: async () => [{ kind: "assistant", text: `terminal summary from ${path}`, truncated: false }],
+        stop: () => {},
+      }),
+    });
+
+    runtime.start();
+    eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, { id: "A", agent: "task", agentSource: "bundled", status: "completed", sessionFile: "/tmp/a.jsonl", index: 0 });
+    await Promise.resolve();
+    await runtime.flush();
+
+    expect(JSON.stringify(sent.at(-1))).toContain("terminal summary from /tmp/a.jsonl");
+    await runtime.shutdown();
+  });
 });

@@ -74,4 +74,30 @@ describe("LocalPreviewServer", () => {
       server.close();
     }
   });
+
+  test("websocket close can mark the browser surface closed after grace", async () => {
+    const server = new LocalPreviewServer("<!doctype html><title>Subagent Preview</title>", { browserCloseGraceMs: 0 });
+    const closed: string[] = [];
+    const browserClosed = Promise.withResolvers<void>();
+    const surface = new PreviewBrowserSurface("tok", (item, source) => {
+      closed.push(source);
+      server.unregister(item.token);
+      browserClosed.resolve();
+    });
+    surface.onBrowserClose = () => closed.push("controller");
+    try {
+      const url = server.register(surface);
+      const ws = new WebSocket(new URL("/ws/tok", server.baseUrl));
+      await waitForOpen(ws);
+      const closeEvent = waitForClose(ws);
+      ws.close();
+      await closeEvent;
+      await browserClosed.promise;
+
+      expect(closed).toEqual(["controller", "browser"]);
+      expect((await fetch(url)).status).toBe(404);
+    } finally {
+      server.close();
+    }
+  });
 });

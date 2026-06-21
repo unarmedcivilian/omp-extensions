@@ -1,8 +1,20 @@
 import type { SubagentLifecyclePayload, SubagentProgressPayload } from "@oh-my-pi/pi-coding-agent/task";
 import { applyLifecycle, applyProgress, createPreviewState, snapshotPreview, type PreviewSnapshot, type PreviewState } from "./model.js";
 
-export const TASK_SUBAGENT_LIFECYCLE_CHANNEL = "task:subagent:lifecycle";
-export const TASK_SUBAGENT_PROGRESS_CHANNEL = "task:subagent:progress";
+type TaskChannelExports = {
+  TASK_SUBAGENT_LIFECYCLE_CHANNEL: string;
+  TASK_SUBAGENT_PROGRESS_CHANNEL: string;
+};
+
+const fallbackTaskChannels: TaskChannelExports = {
+  TASK_SUBAGENT_LIFECYCLE_CHANNEL: "task:subagent:lifecycle",
+  TASK_SUBAGENT_PROGRESS_CHANNEL: "task:subagent:progress",
+};
+
+const taskChannels = await import("@oh-my-pi/pi-coding-agent/task").catch(() => fallbackTaskChannels) as TaskChannelExports;
+
+export const TASK_SUBAGENT_LIFECYCLE_CHANNEL = taskChannels.TASK_SUBAGENT_LIFECYCLE_CHANNEL;
+export const TASK_SUBAGENT_PROGRESS_CHANNEL = taskChannels.TASK_SUBAGENT_PROGRESS_CHANNEL;
 
 export interface CollectorOptions { debounceMs?: number }
 export interface CollectorEventBus { on(channel: string, handler: (data: unknown) => void): () => void }

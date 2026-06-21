@@ -16,7 +16,7 @@
   "scripts": {
     "build:runtime": "bun src/build.mjs",
     "test": "bun test tests/*.test.ts",
-    "check": "bun run build:runtime && bun test tests/*.test.ts && bun build src/index.ts --target=bun --external @oh-my-pi/pi-coding-agent --external @oh-my-pi/pi-ai --outdir /tmp/omp-subagent-preview-check"
+    "check": "bun run build:runtime && bun test tests/*.test.ts && bun build src/index.ts --target=bun --external @oh-my-pi/pi-coding-agent --external @oh-my-pi/pi-coding-agent/task --external @oh-my-pi/pi-ai --outdir /tmp/omp-subagent-preview-check"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-coding-agent": "^15",

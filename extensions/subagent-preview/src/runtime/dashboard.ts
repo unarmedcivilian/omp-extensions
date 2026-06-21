@@ -3,6 +3,8 @@ import type { PreviewSnapshot, PreviewStatus, PreviewSubagent } from "../model.j
 export type DashboardFilter = "all" | PreviewStatus;
 export interface DashboardViewState { filter: DashboardFilter; expanded: Set<string> }
 
+const STATUS_FILTERS: PreviewStatus[] = ["pending", "running", "completed", "failed", "aborted"];
+
 export function filterSnapshot(snapshot: PreviewSnapshot, filter: DashboardFilter): PreviewSnapshot {
   if (filter === "all") return snapshot;
   return { ...snapshot, subagents: snapshot.subagents.filter(item => item.status === filter) };
@@ -13,8 +15,7 @@ export function renderDashboard(snapshot: PreviewSnapshot, state: DashboardViewS
   return `
     <section class="summary">
       <button data-action="filter" data-status="all"><span>${snapshot.subagents.length}</span><label>all</label></button>
-      <button data-action="filter" data-status="running"><span>${snapshot.counts.running}</span><label>running</label></button>
-      <button data-action="filter" data-status="completed"><span>${snapshot.counts.completed}</span><label>completed</label></button>
+      ${STATUS_FILTERS.map(status => `<button data-action="filter" data-status="${status}"><span>${snapshot.counts[status]}</span><label>${status}</label></button>`).join("")}
       <button data-action="follow-active"><span>${snapshot.counts.failed + snapshot.counts.aborted}</span><label>follow active</label></button>
     </section>
     <section class="agents">
@@ -27,10 +28,15 @@ function renderAgent(agent: PreviewSubagent, expanded: boolean): string {
   return `<article class="agent" data-id="${escapeHtml(agent.id)}" data-status="${agent.status}">
     <header data-action="toggle" data-agent-id="${escapeHtml(agent.id)}"><strong>${escapeHtml(agent.description ?? agent.id)}</strong><span>${agent.status}</span></header>
     <button data-action="copy" data-agent-id="${escapeHtml(agent.id)}">Copy summary</button>
-    <div class="meta">${escapeHtml(agent.currentTool ?? "idle")} · ${agent.tokens.toLocaleString()} tokens · $${agent.cost.toFixed(4)}</div>
+    <div class="meta">${escapeHtml(agent.currentTool ?? "idle")} · ${agent.tokens.toLocaleString()} tokens · ${formatDuration(agent.durationMs)} · ${agent.nestedTaskCount} nested · $${agent.cost.toFixed(4)}</div>
     ${agent.recentOutput.length ? `<pre>${escapeHtml(agent.recentOutput.join("\n"))}</pre>` : ""}
     ${transcript}
   </article>`;
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(1)}s`;
 }
 
 function escapeHtml(value: string): string {

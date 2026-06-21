@@ -54,6 +54,8 @@ describe("runtime bridge", () => {
       },
     });
 
+    expect(root.innerHTML).toContain("hello");
+
     root.click({ action: "filter", status: "completed" });
     expect(root.innerHTML).toContain("Done");
     expect(root.innerHTML).not.toContain("Active");

@@ -32,21 +32,21 @@ export function createSubagentPreviewRuntime(options: RuntimeOptions) {
   const tailers = new Map<string, RuntimeTranscriptTailer>();
   let collector: SubagentPreviewCollector | undefined;
   let transcriptTimer: ReturnType<typeof setInterval> | undefined;
+  const drainedTerminalTranscripts = new Set<string>();
   let lastSnapshot: PreviewSnapshot | undefined;
 
   const handleSnapshot = (snapshot: PreviewSnapshot) => {
     lastSnapshot = snapshot;
     for (const subagent of snapshot.subagents) {
-      if (subagent.sessionFile && !tailers.has(subagent.id) && !TERMINAL.has(subagent.status)) {
-        tailers.set(subagent.id, createTailer(subagent.sessionFile));
-        if (options.transcriptPollMs === 0) queueMicrotask(() => { void flushTranscripts(); });
+      const terminal = TERMINAL.has(subagent.status);
+      let tailer = tailers.get(subagent.id);
+      if (subagent.sessionFile && !tailer && (!terminal || !drainedTerminalTranscripts.has(subagent.id))) {
+        tailer = createTailer(subagent.sessionFile);
+        tailers.set(subagent.id, tailer);
+        if (!terminal && options.transcriptPollMs === 0) queueMicrotask(() => { void flushTranscripts(); });
       }
-      if (TERMINAL.has(subagent.status) && tailers.has(subagent.id)) {
-        const tailer = tailers.get(subagent.id)!;
-        void flushTailer(subagent.id, tailer).finally(() => {
-          tailer.stop?.();
-          tailers.delete(subagent.id);
-        });
+      if (terminal && tailer) {
+        void drainAndStopTailer(subagent.id, tailer);
       }
     }
     void controller.handleSnapshot(snapshot);
@@ -58,6 +58,18 @@ export function createSubagentPreviewRuntime(options: RuntimeOptions) {
     if (entries.length === 0) return;
     const existing = collector.state.subagents.get(id)?.transcript ?? [];
     replaceTranscript(collector.state, id, [...existing, ...entries].slice(-50));
+  }
+
+  async function drainAndStopTailer(id: string, tailer: RuntimeTranscriptTailer): Promise<void> {
+    await flushTailer(id, tailer);
+    tailer.stop?.();
+    tailers.delete(id);
+    drainedTerminalTranscripts.add(id);
+    if (collector) {
+      const updated = snapshotPreview(collector.state);
+      lastSnapshot = updated;
+      void controller.handleSnapshot(updated);
+    }
   }
 
   async function flushTranscripts(): Promise<void> {
@@ -97,6 +109,7 @@ export function createSubagentPreviewRuntime(options: RuntimeOptions) {
       stopTranscriptPolling();
       for (const tailer of tailers.values()) tailer.stop?.();
       tailers.clear();
+      drainedTerminalTranscripts.clear();
       await controller.dispose();
       controller = createController();
       lastSnapshot = undefined;
@@ -110,6 +123,7 @@ export function createSubagentPreviewRuntime(options: RuntimeOptions) {
       stopTranscriptPolling();
       for (const tailer of tailers.values()) tailer.stop?.();
       tailers.clear();
+      drainedTerminalTranscripts.clear();
       await controller.dispose();
     },
   };
