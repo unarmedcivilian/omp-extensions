@@ -2,8 +2,6 @@ import type { PreviewSnapshot } from "./model.js";
 
 export interface PreviewSurface {
   surfaceRef?: string;
-  closed: boolean;
-  sent: PreviewSnapshot[];
   send(snapshot: PreviewSnapshot): void;
   close(): void;
   onBrowserClose?: (() => void) | undefined;

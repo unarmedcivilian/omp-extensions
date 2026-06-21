@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { PreviewController, type PreviewSurface } from "../src/controller.js";
-import { createPreviewState, applyLifecycle, snapshotPreview } from "../src/model.js";
+import { createPreviewState, applyLifecycle, snapshotPreview, type PreviewSnapshot } from "../src/model.js";
+
+interface TestSurface extends PreviewSurface {
+  closed: boolean;
+  sent: PreviewSnapshot[];
+}
 
 function makeSnapshot(id = "A") {
   const state = createPreviewState();
@@ -9,8 +14,8 @@ function makeSnapshot(id = "A") {
 }
 
 function makeOpener(log: string[]) {
-  return async (): Promise<PreviewSurface> => {
-    const surface: PreviewSurface = {
+  return async (): Promise<TestSurface> => {
+    const surface: TestSurface = {
       surfaceRef: `surface:${log.length + 1}`,
       closed: false,
       sent: [],
@@ -31,7 +36,7 @@ describe("PreviewController", () => {
     await controller.handleSnapshot(makeSnapshot("A"));
 
     expect(log).toEqual(["open:surface:1"]);
-    expect(controller.currentSurface?.sent).toHaveLength(1);
+    expect((controller.currentSurface as TestSurface | undefined)?.sent).toHaveLength(1);
   });
 
   test("browser close detaches but later spawn reopens with existing state", async () => {
@@ -43,7 +48,7 @@ describe("PreviewController", () => {
     await controller.handleSnapshot(makeSnapshot("B"));
 
     expect(log).toEqual(["open:surface:1", "open:surface:2"]);
-    expect(controller.currentSurface?.sent.at(-1)).toMatchObject({ subagents: [{ id: "B" }] });
+    expect((controller.currentSurface as TestSurface | undefined)?.sent.at(-1)).toMatchObject({ subagents: [{ id: "B" }] });
   });
 
   test("close command disables future auto-open", async () => {
@@ -82,7 +87,7 @@ describe("PreviewController", () => {
 
   test("dispose closes a surface that resolves after disposal", async () => {
     const log: string[] = [];
-    const deferred = Promise.withResolvers<PreviewSurface>();
+    const deferred = Promise.withResolvers<TestSurface>();
     const controller = new PreviewController({ openSurface: async () => deferred.promise, notify: () => {} });
     const opening = controller.handleSnapshot(makeSnapshot("A"));
 
