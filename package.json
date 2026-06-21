@@ -4,7 +4,7 @@
   "type": "module",
   "workspaces": ["extensions/*"],
   "scripts": {
-    "test": "bun test tests/*.test.ts && bun --cwd extensions/generative-ui test && bun --cwd extensions/chatgpt-links test && bun --cwd extensions/dynamic-workflows test",
-    "check": "bun test tests/*.test.ts && bun --cwd extensions/generative-ui check && bun --cwd extensions/chatgpt-links check && bun --cwd extensions/dynamic-workflows check"
+    "test": "bun test tests/*.test.ts && bun --cwd extensions/generative-ui test && bun --cwd extensions/chatgpt-links test && bun --cwd extensions/dynamic-workflows test && bun --cwd extensions/subagent-preview test",
+    "check": "bun test tests/*.test.ts && bun --cwd extensions/generative-ui check && bun --cwd extensions/chatgpt-links check && bun --cwd extensions/dynamic-workflows check && bun --cwd extensions/subagent-preview check"
   }
 }
