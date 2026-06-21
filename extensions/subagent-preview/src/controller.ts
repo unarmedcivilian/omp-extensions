@@ -6,6 +6,7 @@ export interface PreviewSurface {
   close(): void;
   onBrowserClose?: (() => void) | undefined;
   onBrowserReconnect?: (() => void) | undefined;
+  onBrowserClosed?: (() => void) | undefined;
 }
 
 export interface PreviewControllerOptions {
@@ -18,6 +19,8 @@ export class PreviewController {
   #latestSnapshot: PreviewSnapshot | undefined;
   #autoOpenEnabled = true;
   #opening: Promise<void> | undefined;
+  #detachedSurface: PreviewSurface | undefined;
+  #disposed = false;
   #generation = 0;
 
   constructor(readonly options: PreviewControllerOptions) {}
@@ -31,22 +34,37 @@ export class PreviewController {
   }
 
   handleBrowserClose(surface?: PreviewSurface): void {
-    if (!surface || this.currentSurface === surface) this.currentSurface = undefined;
+    if (!surface) {
+      this.currentSurface = undefined;
+      return;
+    }
+    if (this.currentSurface === surface) {
+      this.currentSurface = undefined;
+      this.#detachedSurface = surface;
+    }
   }
 
   handleBrowserReconnect(surface: PreviewSurface): void {
-    if (this.currentSurface) return;
+    if (this.#disposed || this.currentSurface || this.#detachedSurface !== surface) return;
+    this.#detachedSurface = undefined;
     this.currentSurface = surface;
     if (this.#latestSnapshot) surface.send(this.#latestSnapshot);
+  }
+
+  handleBrowserClosed(surface: PreviewSurface): void {
+    const wasDetached = this.#detachedSurface === surface;
+    if (this.currentSurface === surface) this.currentSurface = undefined;
+    if (wasDetached) this.#detachedSurface = undefined;
+    if (wasDetached && !this.#disposed && this.#autoOpenEnabled && this.#latestSnapshot?.subagents.length) {
+      void this.handleSnapshot(this.#latestSnapshot);
+    }
   }
 
   async runCommand(rawArgs: string): Promise<void> {
     const command = rawArgs.trim().toLowerCase();
     if (command === "close") {
       this.#autoOpenEnabled = false;
-      const surface = this.currentSurface;
-      this.currentSurface = undefined;
-      surface?.close();
+      this.#closeOwnedSurfaces();
       return;
     }
     if (command === "disable") {
@@ -67,10 +85,18 @@ export class PreviewController {
 
   async dispose(): Promise<void> {
     this.#generation++;
-    const surface = this.currentSurface;
-    this.currentSurface = undefined;
-    surface?.close();
+    this.#disposed = true;
+    this.#closeOwnedSurfaces();
     await this.#opening;
+  }
+
+  #closeOwnedSurfaces(): void {
+    const surface = this.currentSurface;
+    const detachedSurface = this.#detachedSurface;
+    this.currentSurface = undefined;
+    this.#detachedSurface = undefined;
+    surface?.close();
+    if (detachedSurface && detachedSurface !== surface) detachedSurface.close();
   }
 
   async #ensureSurface(options: { sendLatest?: boolean } = {}): Promise<void> {
@@ -79,6 +105,7 @@ export class PreviewController {
       if (sendLatest && this.#latestSnapshot) this.currentSurface.send(this.#latestSnapshot);
       return;
     }
+    if (this.#detachedSurface) return;
     if (this.#opening) return this.#opening;
     const generation = this.#generation;
     const opening = (async () => {
@@ -88,8 +115,10 @@ export class PreviewController {
           surface.close();
           return;
         }
+        this.#disposed = false;
         surface.onBrowserClose = () => this.handleBrowserClose(surface);
         surface.onBrowserReconnect = () => this.handleBrowserReconnect(surface);
+        surface.onBrowserClosed = () => this.handleBrowserClosed(surface);
         this.currentSurface = surface;
         if (sendLatest && this.#latestSnapshot) surface.send(this.#latestSnapshot);
       } catch (error) {

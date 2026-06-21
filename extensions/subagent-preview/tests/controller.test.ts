@@ -23,6 +23,7 @@ function makeOpener(log: string[]) {
       close() { this.closed = true; log.push(`close:${this.surfaceRef}`); },
       onBrowserClose: undefined,
       onBrowserReconnect: undefined,
+      onBrowserClosed: undefined,
     };
     log.push(`open:${surface.surfaceRef}`);
     return surface;
@@ -68,6 +69,18 @@ describe("PreviewController", () => {
     expect(log).toEqual(["open:surface:1"]);
     expect((controller.currentSurface as TestSurface | undefined)?.surfaceRef).toBe("surface:1");
     expect(surface.sent.at(-1)).toMatchObject({ subagents: [{ id: "B" }] });
+  });
+
+  test("dispose closes a grace-held detached surface", async () => {
+    const log: string[] = [];
+    const controller = new PreviewController({ openSurface: makeOpener(log), notify: () => {} });
+
+    await controller.handleSnapshot(makeSnapshot("A"));
+    const surface = controller.currentSurface as TestSurface;
+    surface.onBrowserClose?.();
+    await controller.dispose();
+
+    expect(log).toEqual(["open:surface:1", "close:surface:1"]);
   });
   test("close command disables future auto-open", async () => {
     const log: string[] = [];
