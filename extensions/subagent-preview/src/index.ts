@@ -6,10 +6,10 @@ import { replaceTranscript, snapshotPreview, type PreviewSnapshot, type PreviewS
 import { LocalPreviewServer } from "./server.js";
 import { createPreviewSurfaceOpener } from "./surface.js";
 import { TranscriptTailer } from "./transcript.js";
+import { RUNTIME_HTML } from "./runtime.bundle.js";
 
 const installedApis = new WeakSet<object>();
 const TERMINAL = new Set<PreviewStatus>(["completed", "failed", "aborted"]);
-const DEFAULT_RUNTIME_HTML = "<!doctype html><title>Subagent Preview</title><body><div id=\"root\">Subagent Preview</div></body>";
 
 export interface RuntimeTranscriptTailer {
   readNew(): Promise<TranscriptEntry[]>;
@@ -142,7 +142,7 @@ export function createSubagentPreviewExtension(): (pi: ExtensionAPI) => void {
 
     pi.on("session_start", async (_event, ctx) => {
       await shutdown();
-      server = new LocalPreviewServer(DEFAULT_RUNTIME_HTML);
+      server = new LocalPreviewServer(RUNTIME_HTML);
       const opener = createPreviewSurfaceOpener({ server, transport: createCmuxTransport() });
       runtime = createSubagentPreviewRuntime({ eventBus: pi.events, openSurface: opener, notify: makeNotify(ctx) });
       runtime.start();
