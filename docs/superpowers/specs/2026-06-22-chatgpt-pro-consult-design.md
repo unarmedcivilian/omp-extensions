@@ -101,11 +101,14 @@ Create a new package at `extensions/chatgpt-pro-consult`.
   - Calls the SDK with an explicit Pro-mode contract:
     ```ts
     const useCurrentThread = params.thread === "current";
+    const currentTarget = useCurrentThread
+      ? await cmuxBrowser.requireSelectedChatGptSurface(signal)
+      : undefined;
     await chatgpt.ask({
       prompt,
       thread: useCurrentThread ? { type: "current" } : { type: "new" },
-      existingTab: useCurrentThread
-        ? { target: { type: "selected", host: "chatgpt" }, ifMissing: "block", ifMultiple: "first", requireChatGPT: true }
+      existingTab: currentTarget
+        ? { target: { type: "tabId", tabId: currentTarget.tabId }, ifMissing: "block", ifMultiple: "block", requireChatGPT: true }
         : undefined,
       preferExistingTab: useCurrentThread ? true : false,
       mode: { intelligence: "pro", timeoutMs: modeTimeoutMs },
@@ -133,13 +136,14 @@ Create a new package at `extensions/chatgpt-pro-consult`.
     | `name` | Stable value such as `cmux`. |
     | `tabs.create(url)` / `tabs.new(url)` | Open a new cmux browser surface and return a `CmuxPageLike` bound to that surface. |
     | `newPage()` | Open a blank or ChatGPT-targeted cmux browser surface and return a `CmuxPageLike`. |
-    | `tabs.selected()` | Return the currently tracked/selected ChatGPT surface only when `thread: "current"` preflight has identified one; otherwise `undefined`. |
-    | `user.openTabs()` | Return candidate ChatGPT surfaces known to cmux with id, URL, title, and conversation id when cmux can enumerate them. If cmux cannot enumerate user tabs, return an empty list rather than guessing. |
-    | `user.claimTab(tab)` | Convert the selected candidate surface into a `CmuxPageLike` without taking ownership for cleanup. |
+    | `tabs.selected()` | Return the preflight-resolved selected ChatGPT surface for `thread: "current"`; otherwise `undefined`. |
+    | `tabs.get(id)` | Return the exact cmux surface/page for a preflight-selected tab id. |
+    | `user.openTabs()` | Return candidate ChatGPT surfaces known to cmux with id, URL, title, and conversation id when cmux can enumerate them. For current-thread calls, the exact `tabId` target prevents first-candidate selection; tests must cover multiple open ChatGPT tabs. |
+    | `user.claimTab(tab)` | Convert the exact candidate surface into a `CmuxPageLike` without taking ownership for cleanup. |
 
   - For `thread: "new"`, the runner passes `preferExistingTab: false`; bootstrap must create an extension-owned surface and then execute the SDK `threads.new` step.
-  - For `thread: "current"`, the runner passes the explicit selected-ChatGPT `existingTab` policy above; if no selected/current ChatGPT surface is available, return a structured blocker instead of creating a new tab or choosing the first unrelated ChatGPT tab.
-  - Browser adapter tests must prove `createChatGPT({ browser: cmuxBrowser })` reaches SDK bootstrap without `globalThis.agent`, creates a surface for `thread: "new"`, and blocks missing `thread: "current"` targets.
+  - For `thread: "current"`, preflight must resolve the selected/current ChatGPT surface before calling the SDK, then pass `existingTab.target: { type: "tabId", tabId: selectedSurfaceId }` with `ifMissing: "block"` and `ifMultiple: "block"`. If no selected/current ChatGPT surface is available, return a structured blocker instead of creating a new tab or choosing an unrelated ChatGPT tab.
+  - Browser adapter tests must prove `createChatGPT({ browser: cmuxBrowser })` reaches SDK bootstrap without `globalThis.agent`, creates a surface for `thread: "new"`, blocks missing `thread: "current"` targets, and targets the preflight-selected tab when multiple ChatGPT tabs are open.
 
 - `src/cmux-page.ts`
   - Adapter from cmux browser operations to the SDK `PageLike` and `LocatorLike` subset needed by the MVP.
