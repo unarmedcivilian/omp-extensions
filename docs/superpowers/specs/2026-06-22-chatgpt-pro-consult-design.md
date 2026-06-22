@@ -86,6 +86,7 @@ Create a new package at `extensions/chatgpt-pro-consult`.
   - Peer dependency on `@oh-my-pi/pi-coding-agent`.
   - Runtime dependency on `codex-chatgpt-control`.
   - `test` and `check` scripts matching existing extension conventions.
+  - Root `package.json` `test` and `check` scripts must be updated to enumerate `extensions/chatgpt-pro-consult`, because this repo does not rely on workspace-wide implicit test discovery.
 
 - `src/index.ts`
   - OMP extension factory.
@@ -97,10 +98,19 @@ Create a new package at `extensions/chatgpt-pro-consult`.
 - `src/consult.ts`
   - Pure workflow orchestration.
   - Builds a `codex-chatgpt-control` client using the cmux adapter.
-  - Selects Pro mode.
-  - Opens a new/current thread.
-  - Submits the prompt.
-  - Waits and reads Markdown.
+  - Calls the SDK with an explicit Pro-mode contract:
+    ```ts
+    await chatgpt.ask({
+      prompt,
+      thread: params.thread === "current" ? { type: "current" } : { type: "new" },
+      mode: { intelligence: "pro", timeoutMs: modeTimeoutMs },
+      wait: { timeoutMs: waitTimeoutMs },
+      read: { format: "markdown" },
+      report: false,
+    });
+    ```
+  - The single `timeout_ms` parameter is split into bounded mode and submit/wait budgets; read extraction has no SDK `timeoutMs` field, so adapter `evaluate`/`content` calls must enforce the remaining consult deadline.
+  - Fake-client tests must assert the exact SDK argument shape so Pro mode cannot regress to default Thinking mode.
   - Converts SDK `CommandResult`/run result into OMP tool details.
 
 - `src/cmux.ts`
@@ -110,9 +120,38 @@ Create a new package at `extensions/chatgpt-pro-consult`.
   - Keep enough surface lifecycle control to close only host-opened surfaces.
 
 - `src/cmux-page.ts`
-  - Adapter from cmux browser operations to the SDK `PageLike` subset needed by the MVP.
-  - Methods likely needed by SDK submit/wait/read/mode code: `url`, `title`, `goto`, `locator`, `getByRole`, `getByText`, `getByPlaceholder`, `keyboard.press`, `waitForTimeout`, `evaluate`, `content`, and `close`.
-  - The adapter should be intentionally small and tested against fake cmux responses. Avoid exposing a generic browser automation framework.
+  - Adapter from cmux browser operations to the SDK `PageLike` and `LocatorLike` subset needed by the MVP.
+  - Required `PageLike` contract:
+
+    | SDK member | MVP implementation |
+    | --- | --- |
+    | `url()` / `title()` | cmux `browser <surface> get url/title` or socket equivalents. |
+    | `goto(url)` | cmux navigation for new-thread/current-thread setup when the SDK requests it. |
+    | `content()` | cmux `get html body` fallback for SDK HTML parsing. |
+    | `evaluate(fn, arg)` | cmux `eval` with a serialized function and JSON argument; required for SDK page-state, message extraction, DOM click fallback, mode menu selection, and generation-state polling. |
+    | `waitForTimeout(ms)` | abort-aware sleep bounded by the consult signal and deadline. |
+    | `keyboard.press(key)` | cmux `press` for submit fallback. |
+    | `mouse` / `cua` pointer click helpers | implemented only if SDK mode/menu paths require pointer fallback; otherwise return a structured unsupported operation before prompt submission. |
+
+  - Required `LocatorLike` contract:
+
+    | SDK member | MVP implementation |
+    | --- | --- |
+    | `locator(selector)` | compose a descendant CSS selector or DOM resolver. |
+    | `getByRole(role, { name })` | DOM resolver over role attributes and native button/textbox semantics, matching string or `RegExp` names against visible text and `aria-label`. |
+    | `getByText(text)` | DOM resolver matching visible text. |
+    | `getByPlaceholder(text)` | DOM resolver matching placeholder text. |
+    | `filter({ hasText })` | refine resolver by visible text. |
+    | `count()` / `nth()` / `first()` / `last()` | evaluate resolver result count/index in the page. |
+    | `click()` | DOM click through `evaluate`, with cmux native click only as an optional simple-selector optimization. |
+    | `fill(value)` | set text/textarea/contenteditable value, dispatch input/change events, and verify the resulting text. |
+    | `textContent()` / `innerText()` / `innerHTML()` | evaluate the selected node. |
+    | `isVisible()` | evaluate layout visibility. |
+    | `evaluate(fn)` | run the supplied function against the selected element through cmux `eval`. |
+
+  - `setInputFiles` is not part of the MVP contract; it belongs to the file-upload second pass.
+  - If a required operation is unavailable, the adapter must return a structured `selector_drift`/`unsupported` blocker with code `cmux_operation_unavailable` before submitting the prompt. After submission, unavailable read/wait operations leave the surface open and report `surface_ref`.
+  - Adapter tests must cover every SDK path used by `modes.set`, `messages.ask`, `messages.wait`, and `messages.readLatest`.
 
 - `tests/*.test.ts`
   - Extension registration tests.
@@ -165,18 +204,20 @@ Important cases:
 - Rate limit: leave the surface open and return rate-limit details.
 - Pro mode unavailable/ambiguous: return selected/candidate mode data if available.
 - Selector drift: include the operation that failed and safe candidate labels when available.
-- Timeout: return partial metadata and do not resubmit the prompt automatically.
-- Abort: stop waiting, close only host-owned surfaces unless `keep_surface` is true, and surface cancellation cleanly.
+- Timeout before prompt submission: return partial metadata and close only extension-owned surfaces when safe.
+- Timeout after prompt submission: do not resubmit; leave the surface open, return `surface_ref`, and mark the result inspectable unless the runner can prove no prompt was submitted.
+- Abort: each consult constructs an abort-aware cmux page/transport that closes over the OMP `AbortSignal`; every RPC, CLI process, sleep, and wait races that signal and throws/maps `AbortError`; the outer consult also races the SDK promise so cleanup runs immediately on cancellation.
 
 Do not retry prompt submission blindly. Duplicate ChatGPT submissions are worse than a clear partial/blocked result.
 
 ## Surface ownership and cleanup
 
-Track whether this extension opened a surface.
+Track whether this extension opened a surface and whether the prompt was submitted.
 
 - On success, close extension-opened surfaces unless `keep_surface` is true.
 - On login/action-required blockers, leave the surface open for user inspection.
-- On abort or internal error, close only extension-opened surfaces when safe.
+- On after-submit timeout, selector drift, modal, rate limit, captcha, or read failure, leave the surface open and report `surface_ref`.
+- On abort or internal error before prompt submission, close only extension-opened surfaces when safe.
 - Never close a surface that was merely reused/claimed from the user unless the user explicitly asked the tool to own it.
 
 ## Security and privacy
@@ -196,6 +237,7 @@ Narrow tests:
 
 Root verification after implementation:
 
+- Root `package.json` `test` and `check` scripts include `bun --cwd extensions/chatgpt-pro-consult test` and `bun --cwd extensions/chatgpt-pro-consult check`.
 - `bun run check`
 
 Behavioral coverage:
@@ -223,4 +265,5 @@ MVP is complete when:
 7. It does not call runtime OMP actions during module load.
 8. It respects `AbortSignal` during long-running browser work.
 9. Extension tests and checks pass.
-10. Root `bun run check` passes before claiming repo-wide success.
+10. Root `package.json` `test` and `check` scripts include `extensions/chatgpt-pro-consult`.
+11. Root `bun run check` passes before claiming repo-wide success.
