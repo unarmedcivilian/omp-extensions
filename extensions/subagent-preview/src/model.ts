@@ -94,7 +94,7 @@ export function applyProgress(state: PreviewState, payload: SubagentProgressPayl
 export function replaceTranscript(state: PreviewState, id: string, transcript: TranscriptEntry[]): void {
   const subagent = state.subagents.get(id);
   if (!subagent) return;
-  subagent.transcript = transcript;
+  subagent.transcript = sortTranscriptEntries(transcript);
   subagent.updatedAt = Date.now();
   state.updatedAt = subagent.updatedAt;
 }
@@ -126,10 +126,23 @@ function createSubagent(id: string, index: number, agent: string, agentSource: A
 }
 
 function compareSubagents(a: PreviewSubagent, b: PreviewSubagent): number {
-  const aTerminal = TERMINAL.has(a.status);
-  const bTerminal = TERMINAL.has(b.status);
-  if (aTerminal !== bTerminal) return aTerminal ? 1 : -1;
-  return b.updatedAt - a.updatedAt || a.index - b.index || a.id.localeCompare(b.id);
+  return b.index - a.index || b.updatedAt - a.updatedAt || b.id.localeCompare(a.id);
+}
+
+function sortTranscriptEntries(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  return transcript
+    .map((entry, index) => ({ entry, index, timestampMs: parseTimestampMs(entry.timestamp) }))
+    .sort((a, b) => {
+      if (a.timestampMs !== undefined && b.timestampMs !== undefined) return b.timestampMs - a.timestampMs || b.index - a.index;
+      return b.index - a.index;
+    })
+    .map(item => item.entry);
+}
+
+function parseTimestampMs(timestamp: string | undefined): number | undefined {
+  if (!timestamp) return undefined;
+  const parsed = Date.parse(timestamp);
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 function countNestedTasks(progress: AgentProgress): number {
