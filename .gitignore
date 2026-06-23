@@ -3,4 +3,5 @@ node_modules/
 bun.lock
 dist/
 artifacts/
+.worktrees/
 reference/
