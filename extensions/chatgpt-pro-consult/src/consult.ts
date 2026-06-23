@@ -135,7 +135,7 @@ export async function runChatGptProConsult(
         raceAbort(browser.requireSelectedChatGptSurface(signal), signal),
       );
     } catch (error) {
-      await closeOwnedSurfacesQuietly(browser, signal);
+      await closeOwnedSurfacesQuietly(browser);
       return isTimeoutOrAbortError(error)
         ? errorResult(error, thread, false, browser.primarySurfaceRef())
         : blockedPreflightResult(error, thread);
@@ -160,11 +160,11 @@ export async function runChatGptProConsult(
 
     const submitted = promptPossiblySubmitted || hasSubmittedPrompt(result);
     const keptSurface = shouldLeaveSurfaceOpen(result, submitted, params.keepSurface === true);
-    if (!keptSurface) await closeOwnedSurfacesQuietly(browser, signal);
+    if (!keptSurface) await closeOwnedSurfacesQuietly(browser);
     return mapCommandResult(result, thread, keptSurface, browser.primarySurfaceRef());
   } catch (error) {
     const submitted = promptPossiblySubmitted || (result ? hasSubmittedPrompt(result) : false);
-    if (!submitted) await closeOwnedSurfacesQuietly(browser, signal);
+    if (!submitted) await closeOwnedSurfacesQuietly(browser);
     return errorResult(error, thread, submitted, browser.primarySurfaceRef());
   }
 }
@@ -335,9 +335,9 @@ function createTimeoutError(operation: string): Error {
   return error;
 }
 
-async function closeOwnedSurfacesQuietly(browser: CmuxBrowserAdapter, signal: AbortSignal | undefined): Promise<void> {
+async function closeOwnedSurfacesQuietly(browser: CmuxBrowserAdapter): Promise<void> {
   try {
-    await browser.closeOwnedSurfaces(signal);
+    await browser.closeOwnedSurfaces();
   } catch {
     // Cleanup is best-effort; preserve the original consult result.
   }

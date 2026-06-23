@@ -63,7 +63,8 @@ class FakeCmuxTransport implements CmuxTransport {
 
   async press(): Promise<void> {}
 
-  async close(surface: string): Promise<void> {
+  async close(surface: string, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted === true) throw new DOMException("Aborted", "AbortError");
     this.closedSurfaces.push(surface);
   }
 
@@ -91,6 +92,23 @@ describe("cmux browser adapter", () => {
     expect(transport.openedUrls).toEqual(["https://chatgpt.com/"]);
     await expect(page.url?.()).resolves.toBe("https://chatgpt.com/c/created");
     expect(browser.primarySurfaceRef()).toBe("surface:1");
+    const selected = await browser.tabs?.selected?.() as { tabId?: string } | undefined;
+    expect(selected?.tabId).toBe("surface:1");
+  });
+
+  test("opened ChatGPT surfaces are rediscoverable as user tabs", async () => {
+    const transport = new FakeCmuxTransport();
+    const browser = createCmuxBrowserAdapter({ transport });
+
+    await browser.tabs?.create?.("https://chatgpt.com/");
+
+    await expect(browser.user?.openTabs?.()).resolves.toEqual([{
+      id: "surface:1",
+      url: "https://chatgpt.com/",
+      title: "ChatGPT",
+    }]);
+    const listed = await browser.tabs?.list?.();
+    expect((listed?.[0] as { tabId?: string } | undefined)?.tabId).toBe("surface:1");
   });
 
   test("requireSelectedChatGptSurface rejects when no selected or current ChatGPT surface exists", async () => {
@@ -113,6 +131,8 @@ describe("cmux browser adapter", () => {
       title: "Current",
     });
     expect(browser.primarySurfaceRef()).toBe("surface:7");
+    const selected = await browser.tabs?.selected?.() as { tabId?: string } | undefined;
+    expect(selected?.tabId).toBe("surface:7");
   });
 
   test("selectedSurface path pins the exact selected surface id", async () => {
@@ -194,5 +214,17 @@ describe("cmux browser adapter", () => {
 
     expect(transport.closedSurfaces).toEqual(["surface:1", "surface:2"]);
     expect(browser.primarySurfaceRef()).toBe("surface:50");
+  });
+
+  test("closeOwnedSurfaces ignores an already aborted consult signal during cleanup", async () => {
+    const controller = new AbortController();
+    const transport = new FakeCmuxTransport();
+    const browser = createCmuxBrowserAdapter({ transport, signal: controller.signal });
+
+    await browser.tabs?.create?.("https://chatgpt.com/");
+    controller.abort();
+    await browser.closeOwnedSurfaces();
+
+    expect(transport.closedSurfaces).toEqual(["surface:1"]);
   });
 });

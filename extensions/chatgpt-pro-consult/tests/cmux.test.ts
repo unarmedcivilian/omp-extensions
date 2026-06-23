@@ -47,6 +47,29 @@ describe("cmux transport", () => {
     await expect(transport.resolveCurrentSurface()).resolves.toBe("surface:99");
   });
 
+  test("explicit current-surface environment overrides the remembered surface store", async () => {
+    const transport = createCmuxTransport({
+      env: { CHATGPT_PRO_CONSULT_SURFACE: "surface:99" },
+      surfaceStore: { lastChatGptSurface: "surface:7" },
+    });
+
+    await expect(transport.resolveCurrentSurface()).resolves.toBe("surface:99");
+  });
+
+  test("current cmux identify result overrides stale remembered surface store", async () => {
+    const runner: CmuxRunner = async args => {
+      if (args[0] === "identify") return { stdout: JSON.stringify({ surface: "surface:8" }), stderr: "", exitCode: 0 };
+      return { stdout: "", stderr: "", exitCode: 1 };
+    };
+    const transport = createCmuxTransport({
+      runner,
+      env: {},
+      surfaceStore: { lastChatGptSurface: "surface:7" },
+    });
+
+    await expect(transport.resolveCurrentSurface()).resolves.toBe("surface:8");
+  });
+
   test("parses supported cmux surface reference shapes and rejects invalid values", () => {
     expect(parseCmuxSurfaceRef("surface:7")).toBe("surface:7");
     expect(parseCmuxSurfaceRef({ surface: "surface:8" })).toBe("surface:8");

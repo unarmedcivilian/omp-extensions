@@ -19,11 +19,15 @@ export interface CmuxTransport {
   resolveCurrentSurface(signal?: AbortSignal): Promise<string | undefined>;
 }
 
+export interface CmuxSurfaceStore {
+  lastChatGptSurface?: string;
+}
+
 export interface CreateCmuxTransportOptions {
   socket?: CmuxSocketRequester;
   runner?: CmuxRunner;
   env?: Record<string, string | undefined>;
-  surfaceStore?: { lastChatGptSurface?: string };
+  surfaceStore?: CmuxSurfaceStore;
 }
 
 export interface CreateCmuxSocketRequesterOptions {
@@ -179,15 +183,15 @@ async function closeWithCli(surface: string, runner: CmuxRunner, env: Record<str
 }
 
 async function resolveCurrentSurface(
-  surfaceStore: { lastChatGptSurface?: string } | undefined,
+  surfaceStore: CmuxSurfaceStore | undefined,
   env: Record<string, string | undefined>,
   runner: CmuxRunner,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  return tryParseCmuxSurfaceRef(surfaceStore?.lastChatGptSurface)
-    ?? tryParseCmuxSurfaceRef(env.CHATGPT_PRO_CONSULT_SURFACE)
+  return tryParseCmuxSurfaceRef(env.CHATGPT_PRO_CONSULT_SURFACE)
     ?? tryParseCmuxSurfaceRef(env.CMUX_CHATGPT_SURFACE_ID)
-    ?? await identifyCurrentSurface(runner, signal);
+    ?? await identifyCurrentSurface(runner, signal)
+    ?? tryParseCmuxSurfaceRef(surfaceStore?.lastChatGptSurface);
 }
 
 async function identifyCurrentSurface(runner: CmuxRunner, signal?: AbortSignal): Promise<string | undefined> {

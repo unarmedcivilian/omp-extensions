@@ -1,5 +1,5 @@
 import type { BrowserLike, BrowserUserTabInfo, PageLike } from "codex-chatgpt-control";
-import { createCmuxTransport, type CmuxTransport } from "./cmux.js";
+import { createCmuxTransport, type CmuxSurfaceStore, type CmuxTransport } from "./cmux.js";
 import { createCmuxPage } from "./cmux-page.js";
 import type { ConsultDeadline, ConsultLifecycle } from "./consult.js";
 
@@ -23,6 +23,7 @@ export interface CreateCmuxBrowserAdapterOptions {
   signal?: AbortSignal;
   deadline?: ConsultDeadline;
   lifecycle?: ConsultLifecycle;
+  surfaceStore?: CmuxSurfaceStore;
 }
 
 const CHATGPT_HOSTS: Record<string, true> = {
@@ -32,11 +33,14 @@ const CHATGPT_HOSTS: Record<string, true> = {
 };
 
 const DEFAULT_CHATGPT_URL = "https://chatgpt.com/";
+const DEFAULT_SURFACE_STORE: CmuxSurfaceStore = {};
+
 
 export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOptions = {}): CmuxBrowserAdapter {
-  const transport = options.transport ?? createCmuxTransport();
+  const transport = options.transport ?? createCmuxTransport({ surfaceStore: options.surfaceStore ?? DEFAULT_SURFACE_STORE });
   const ownedSurfaces = new Set<string>();
   let primarySurface: string | undefined;
+  let selectedTabId = options.selectedSurface?.tabId;
   const surfacesByTabId = new Map<string, SelectedChatGptSurface>();
   for (const surface of options.knownSurfaces ?? []) surfacesByTabId.set(surface.tabId, surface);
   if (options.selectedSurface !== undefined) surfacesByTabId.set(options.selectedSurface.tabId, options.selectedSurface);
@@ -64,9 +68,12 @@ export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOption
 
   async function openOwnedPage(url: string): Promise<PageLike> {
     const surface = await raceTransport("cmux.browser.open", transport.open(url, options.signal));
+    const openedSurface = { tabId: surface, surface, url };
     ownedSurfaces.add(surface);
+    surfacesByTabId.set(surface, openedSurface);
+    selectedTabId = surface;
     trackPrimary(surface);
-    return pageFor({ tabId: surface, surface }, true);
+    return pageFor(openedSurface, true);
   }
 
   async function selectedSurfaceWithUrl(surface: SelectedChatGptSurface, signal?: AbortSignal): Promise<SelectedChatGptSurface> {
@@ -104,8 +111,8 @@ export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOption
       create: async (url: string) => openOwnedPage(url),
       new: async (url = DEFAULT_CHATGPT_URL) => openOwnedPage(url),
       selected: async () => {
-        if (options.selectedSurface === undefined) return undefined;
-        return pageFor(await selectedSurfaceWithUrl(options.selectedSurface));
+        const selected = selectedTabId === undefined ? undefined : surfacesByTabId.get(selectedTabId);
+        return selected === undefined ? undefined : pageFor(await selectedSurfaceWithUrl(selected));
       },
       get: async (id: string) => pageFor(surfacesByTabId.get(id) ?? { tabId: id, surface: id }),
       list: async () => {
@@ -120,6 +127,7 @@ export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOption
       claimTab: async (tab: string | BrowserUserTabInfo) => {
         const tabId = typeof tab === "string" ? tab : tab.id;
         const surface = surfacesByTabId.get(tabId) ?? { tabId, surface: tabId };
+        selectedTabId = tabId;
         trackPrimary(surface.surface);
         return pageFor(surface);
       },
@@ -134,6 +142,7 @@ export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOption
       if (!isChatGptUrl(surface.url)) {
         throw new Error(`Selected cmux surface ${surface.surface} is not a ChatGPT tab (${surface.url ?? "unknown URL"}).`);
       }
+      selectedTabId = surface.tabId;
       trackPrimary(surface.surface);
       return surface;
     },
@@ -144,7 +153,7 @@ export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOption
       const surfaces = [...ownedSurfaces];
       ownedSurfaces.clear();
       for (const surface of surfaces) {
-        await raceTransport("cmux.browser.close", transport.close(surface, signal ?? options.signal)).catch(() => undefined);
+        await transport.close(surface, signal).catch(() => undefined);
       }
     },
   };
