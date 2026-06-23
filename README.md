@@ -41,6 +41,19 @@ Adds one OMP tool:
 The tool assumes the user is already logged into ChatGPT in the cmux browser profile. Conversation imports default to
 `artifacts/chatgpt/<conversation-id>.txt`.
 
+### `omp-chatgpt-pro-consult`
+
+Path: `extensions/chatgpt-pro-consult`
+
+Adds one OMP tool:
+
+- `chatgpt_pro_consult` submits one prompt to ChatGPT Pro through a visible cmux browser session, selects Pro
+  mode, waits for completion, and returns Markdown with structured status/blocker details.
+
+The tool uses the ChatGPT web UI in cmux, not the OpenAI API. It requires the user to be logged into ChatGPT with Pro
+access in the cmux browser profile. Extension-owned surfaces close after success by default; `keep_surface` and
+submission/action-required blockers retain the surface and report `surfaceRef`.
+
 ### `omp-dynamic-workflows`
 
 Path: `extensions/dynamic-workflows`
@@ -100,6 +113,7 @@ Run one extension check:
 bun --cwd extensions/generative-ui check
 bun --cwd extensions/chatgpt-links check
 bun --cwd extensions/dynamic-workflows check
+bun --cwd extensions/chatgpt-pro-consult check
 bun --cwd extensions/subagent-preview check
 ```
 
@@ -108,6 +122,14 @@ Run one extension's tests:
 ```sh
 bun --cwd extensions/dynamic-workflows test
 bun --cwd extensions/subagent-preview test
+bun --cwd extensions/chatgpt-pro-consult test
+```
+
+Run the ChatGPT Pro consult live smoke manually only when the cmux browser is available and logged into a ChatGPT Pro
+account; it is not part of the repository or extension `check` scripts:
+
+```sh
+bun --cwd extensions/chatgpt-pro-consult smoke -- --prompt "Reply with exactly: omp smoke ok"
 ```
 
 Rebuild the browser runtime bundle after changing files under `extensions/generative-ui/src/runtime`:
