@@ -28,6 +28,7 @@ export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === undefined) continue;
     if (arg === "--") continue;
 
     if (arg === "--keep-surface") {
@@ -35,7 +36,7 @@ export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
       continue;
     }
 
-    if (arg?.startsWith("--prompt=")) {
+    if (arg.startsWith("--prompt=")) {
       prompt = arg.slice("--prompt=".length);
       continue;
     }
@@ -47,7 +48,7 @@ export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
       continue;
     }
 
-    if (arg?.startsWith("--thread=")) {
+    if (arg.startsWith("--thread=")) {
       thread = parseThread(arg.slice("--thread=".length));
       continue;
     }
@@ -59,7 +60,7 @@ export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
       continue;
     }
 
-    if (arg?.startsWith("--timeout-ms=")) {
+    if (arg.startsWith("--timeout-ms=")) {
       timeoutMs = parseTimeoutMs(arg.slice("--timeout-ms=".length));
       continue;
     }
@@ -92,8 +93,19 @@ async function runLiveSmoke(argv: readonly string[]): Promise<number> {
     writeSmokeOutput(result);
     return result.ok ? 0 : 1;
   } catch (error) {
-    const details = failureDetails(error, params?.thread ?? "new", params?.keepSurface === true);
-    const contentText = error instanceof Error ? error.message : "ChatGPT Pro live smoke failed.";
+    const details: ChatGptProConsultDetails = {
+      ok: false,
+      status: "error",
+      warnings: [],
+      thread: params?.thread ?? "new",
+      keptSurface: params?.keepSurface === true,
+      error: error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : error,
+    };
+    const contentText = error instanceof Error
+      ? error.message
+      : "ChatGPT Pro live smoke failed.";
     writeSmokeOutput({ ok: false, markdown: "", contentText, details });
     return 1;
   }
@@ -101,7 +113,7 @@ async function runLiveSmoke(argv: readonly string[]): Promise<number> {
 
 function readFlagValue(argv: readonly string[], index: number, flag: string): FlagReadResult {
   const value = argv[index + 1];
-  if (value === undefined || value === "--" || value.startsWith("--")) {
+  if (value === undefined) {
     throw new Error(`${flag} requires a value`);
   }
 
@@ -136,7 +148,7 @@ function writeSmokeOutput(result: ChatGptProConsultResult): void {
 
 function stringifyCompact(value: unknown): string {
   const seen = new WeakSet<object>();
-  return JSON.stringify(value, (_key, item) => {
+  const json = JSON.stringify(value, (_key, item) => {
     if (item instanceof Error) {
       return {
         name: item.name,
@@ -152,29 +164,7 @@ function stringifyCompact(value: unknown): string {
 
     return item;
   });
-}
-
-function failureDetails(error: unknown, thread: ChatGptProThread, keptSurface: boolean): ChatGptProConsultDetails {
-  return {
-    ok: false,
-    status: "error",
-    warnings: [],
-    thread,
-    keptSurface,
-    error: printableError(error),
-  };
-}
-
-function printableError(error: unknown): unknown {
-  if (error instanceof Error) {
-    return {
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    };
-  }
-
-  return error;
+  return json ?? "null";
 }
 
 if (import.meta.main) {

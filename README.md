@@ -51,8 +51,8 @@ Adds one OMP tool:
   mode, waits for completion, and returns Markdown with structured status/blocker details.
 
 The tool uses the ChatGPT web UI in cmux, not the OpenAI API. It requires the user to be logged into ChatGPT with Pro
-access in the cmux browser profile. Extension-owned surfaces close after success by default; `keep_surface` and
-submission/action-required blockers retain the surface and report `surfaceRef`.
+access in the cmux browser profile. Extension-owned surfaces close after success by default; `keep_surface`,
+post-submission failures, and login/action-required/rate-limit blockers retain the surface and report `surfaceRef`.
 
 ### `omp-dynamic-workflows`
 

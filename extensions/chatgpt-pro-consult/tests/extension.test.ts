@@ -131,6 +131,20 @@ describe("ChatGPT Pro consult extension", () => {
     expect(fake.tools.map(tool => tool.name)).toEqual(["chatgpt_pro_consult"]);
   });
 
+  test("installs independently on distinct ExtensionAPI instances", () => {
+    const first = makeFakePi();
+    const second = makeFakePi();
+    const extension = createChatGptProConsultExtension();
+
+    extension(first.api);
+    extension(second.api);
+
+    expect(first.labels).toEqual(["ChatGPT Pro Consult"]);
+    expect(second.labels).toEqual(["ChatGPT Pro Consult"]);
+    expect(first.tools.map(tool => tool.name)).toEqual(["chatgpt_pro_consult"]);
+    expect(second.tools.map(tool => tool.name)).toEqual(["chatgpt_pro_consult"]);
+  });
+
   test("registers tool metadata and parameter schema", () => {
     const fake = makeFakePi();
 
