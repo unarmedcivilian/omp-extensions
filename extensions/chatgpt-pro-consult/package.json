@@ -4,7 +4,7 @@
   "description": "ChatGPT Pro consult tool for OMP via visible cmux browser sessions",
   "type": "module",
   "keywords": ["omp-package", "oh-my-pi", "chatgpt", "cmux"],
-  "files": ["src", "README.md"],
+  "files": ["src", "scripts", "README.md"],
   "types": "./src/index.ts",
   "exports": {
     ".": {
@@ -15,6 +15,7 @@
   "omp": { "extensions": ["./src/index.ts"] },
   "scripts": {
     "test": "bun test tests/*.test.ts",
+    "smoke": "bun run scripts/live-smoke.ts",
     "check": "bun test tests/*.test.ts && bun build src/index.ts --target=bun --external @oh-my-pi/pi-coding-agent --outdir /tmp/omp-chatgpt-pro-consult-check"
   },
   "dependencies": { "codex-chatgpt-control": "^0.2.0-alpha.1" },
