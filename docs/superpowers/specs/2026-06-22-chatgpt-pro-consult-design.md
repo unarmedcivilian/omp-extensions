@@ -261,6 +261,19 @@ Narrow tests:
 - `bun --cwd extensions/chatgpt-pro-consult test`
 - `bun --cwd extensions/chatgpt-pro-consult check`
 
+Standalone core-flow smoke:
+
+- `src/consult.ts` exports the core runner used by both the OMP tool and a dev-only smoke script; the runner must not depend on `ExtensionAPI`.
+- Add `scripts/live-smoke.ts` and package script `smoke` so a developer can run:
+
+  ```sh
+  bun --cwd extensions/chatgpt-pro-consult run smoke -- --prompt "Reply with exactly: omp smoke ok"
+  ```
+
+- The smoke constructs the real cmux browser/page adapter, calls the same consult runner as the tool, prints JSON details plus response Markdown, and exits non-zero on blockers/errors.
+- The smoke is manual/optional and is not part of `check`, because it submits a real ChatGPT prompt and depends on cmux, ChatGPT login, Pro access, and visible browser state.
+- On any action-required blocker or post-submit timeout, the smoke leaves the surface open and prints `surface_ref`.
+
 Root verification after implementation:
 
 - Root `package.json` `test` and `check` scripts include `bun --cwd extensions/chatgpt-pro-consult test` and `bun --cwd extensions/chatgpt-pro-consult check`.
@@ -276,7 +289,7 @@ Behavioral coverage:
 - cmux transport falls back from socket-unavailable to CLI.
 - Adapter invokes the expected cmux commands/RPC for navigation, fill, click, text/html extraction, and wait.
 
-A live ChatGPT smoke should be manual/optional because it depends on account login, Pro access, and visible browser state.
+A live ChatGPT smoke is manual/optional because it depends on account login, Pro access, and visible browser state, but it should exercise the same core runner as the extension tool.
 
 ## Acceptance criteria
 
@@ -290,6 +303,7 @@ MVP is complete when:
 6. The tool returns structured blockers for login/action-required/selector/timeout failures.
 7. It does not call runtime OMP actions during module load.
 8. It respects `AbortSignal` during long-running browser work.
-9. Extension tests and checks pass.
-10. Root `package.json` `test` and `check` scripts include `extensions/chatgpt-pro-consult`.
-11. Root `bun run check` passes before claiming repo-wide success.
+9. The core consult runner can be invoked outside `ExtensionAPI` by the package smoke script.
+10. Extension tests and checks pass.
+11. Root `package.json` `test` and `check` scripts include `extensions/chatgpt-pro-consult`.
+12. Root `bun run check` passes before claiming repo-wide success.
