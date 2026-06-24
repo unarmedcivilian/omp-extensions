@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { resolve } from "node:path";
 import {
   runChatGptProConsult,
   type ChatGptProConsultDeps,
@@ -29,6 +30,16 @@ function depsReturning(
     createChatGptClient: () => ({
       ask: async (args: unknown) => {
         calls.push(args);
+        if (typeof result === "function") return await result();
+        return result;
+      },
+      askWithFiles: async (args: unknown) => {
+        calls.push({ method: "askWithFiles", args });
+        if (typeof result === "function") return await result();
+        return result;
+      },
+      runPlan: async (plan: unknown) => {
+        calls.push({ method: "runPlan", plan });
         if (typeof result === "function") return await result();
         return result;
       },
@@ -74,6 +85,74 @@ describe("runChatGptProConsult", () => {
     expect(result.ok).toBe(true);
     expect(result.markdown).toBe("omp smoke ok");
     expect(result.contentText).toBe("omp smoke ok");
+  });
+
+  test("attaches a single ZIP file through the SDK file workflow", async () => {
+    const deps = depsReturning({ ok: true, status: "ok", output_text: "uploaded", warnings: [], context: { timestamp: "t" } });
+
+    const result = await runChatGptProConsult({ prompt: "  Inspect this  ", zipPath: "fixtures/context.zip", timeoutMs: 90_000 }, deps);
+
+    expect(result.ok).toBe(true);
+    expect(deps.calls).toEqual([{
+      method: "runPlan",
+      plan: {
+        name: "chatgpt-pro-consult-with-zip",
+        policy: { stopOnError: true, returnPartial: true },
+        steps: [
+          { id: "bootstrap", command: "session.bootstrap", args: { preferExistingTab: false } },
+          { id: "new", command: "threads.new" },
+          { id: "mode", command: "modes.set", args: { intelligence: "Pro Extended", timeoutMs: 15_000 } },
+          { id: "attach", command: "files.attach", args: { paths: [resolve("fixtures/context.zip")], timeoutMs: 70_000 } },
+          { id: "ask", command: "messages.ask", args: { text: "Inspect this", wait: { timeoutMs: 70_000 }, read: { format: "markdown" } } },
+        ],
+      },
+    }]);
+  });
+
+  test("rejects non-ZIP upload paths before opening ChatGPT", async () => {
+    const deps = depsReturning({ ok: true, status: "ok", output_text: "done", warnings: [], context: { timestamp: "t" } });
+
+    const result = await runChatGptProConsult({ prompt: "Hi", zipPath: "fixtures/context.txt" }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.details.status).toBe("error");
+    expect((result.details.error as { message?: string } | undefined)?.message).toContain(".zip");
+    expect(deps.calls).toHaveLength(0);
+    expect(deps.closeCalls).toBe(0);
+  });
+
+  test("leaves the surface open for pre-submit upload blockers", async () => {
+    const deps = depsReturning({
+      ok: false,
+      status: "blocked",
+      warnings: [],
+      blocker: { kind: "upload_failed", code: "attachment_processing", message: "ChatGPT is still processing the upload." },
+      context: { turnCount: 0 },
+    });
+
+    const result = await runChatGptProConsult({ prompt: "Inspect", zipPath: "fixtures/context.zip" }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.details.keptSurface).toBe(true);
+    expect(result.details.blocker?.surfaceRef).toBe("surface:7");
+    expect(deps.closeCalls).toBe(0);
+  });
+
+  test("closes the surface for local ZIP preflight blockers", async () => {
+    const deps = depsReturning({
+      ok: false,
+      status: "blocked",
+      warnings: [],
+      blocker: { kind: "upload_failed", code: "file_path_not_file", message: "File attachment path is not a file." },
+      context: { timestamp: "t" },
+    });
+
+    const result = await runChatGptProConsult({ prompt: "Inspect", zipPath: "fixtures/missing.zip" }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.details.keptSurface).toBe(false);
+    expect(result.details.blocker?.surfaceRef).toBeUndefined();
+    expect(deps.closeCalls).toBe(1);
   });
 
   test("configures new-thread browser pages to settle after opening before SDK submission", async () => {

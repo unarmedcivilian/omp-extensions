@@ -27,13 +27,56 @@ describe("cmux transport", () => {
     expect(runnerCalls).toEqual([["--json", "browser", "open-split", "https://chatgpt.com/", "--focus", "false"]]);
   });
 
+  test("runs browser eval through the cmux socket when available", async () => {
+    const socketCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const runnerCalls: string[][] = [];
+    const socket: CmuxSocketRequester = async (method, params) => {
+      socketCalls.push({ method, params: params ?? {} });
+      return { value: "{\"ok\":true}" };
+    };
+    const runner: CmuxRunner = async args => {
+      runnerCalls.push([...args]);
+      return { stdout: "unused", stderr: "", exitCode: 0 };
+    };
+    const transport = createCmuxTransport({ socket, runner, env: {} });
+
+    const result = await transport.eval("surface:7", "JSON.stringify({ ok: true })");
+
+    expect(result).toBe("{\"ok\":true}");
+    expect(socketCalls).toEqual([{
+      method: "browser.eval",
+      params: { surface_id: "surface:7", script: "JSON.stringify({ ok: true })" },
+    }]);
+    expect(runnerCalls).toEqual([]);
+  });
+
   test("runs browser eval through CLI and returns stdout", async () => {
     const calls: string[][] = [];
     const runner: CmuxRunner = async args => {
       calls.push([...args]);
       return { stdout: "{\"ok\":true}", stderr: "", exitCode: 0 };
     };
-    const transport = createCmuxTransport({ runner, env: {} });
+    const socket: CmuxSocketRequester = async () => {
+      throw new CmuxSocketUnavailableError("missing socket");
+    };
+    const transport = createCmuxTransport({ socket, runner, env: {} });
+
+    const result = await transport.eval("surface:7", "JSON.stringify({ ok: true })");
+
+    expect(result).toBe("{\"ok\":true}");
+    expect(calls).toEqual([["browser", "surface:7", "eval", "JSON.stringify({ ok: true })"]]);
+  });
+
+  test("falls back to CLI eval when the cmux socket lacks browser.eval", async () => {
+    const calls: string[][] = [];
+    const runner: CmuxRunner = async args => {
+      calls.push([...args]);
+      return { stdout: "{\"ok\":true}", stderr: "", exitCode: 0 };
+    };
+    const socket: CmuxSocketRequester = async () => {
+      throw new Error("{\"message\":\"Unknown method\",\"code\":\"method_not_found\"}");
+    };
+    const transport = createCmuxTransport({ socket, runner, env: {} });
 
     const result = await transport.eval("surface:7", "JSON.stringify({ ok: true })");
 
@@ -86,7 +129,10 @@ describe("cmux transport", () => {
 
   test("checked CLI failures include stderr and stdout in error messages", async () => {
     const runner: CmuxRunner = async () => ({ stdout: "partial stdout", stderr: "failure stderr", exitCode: 42 });
-    const transport = createCmuxTransport({ runner, env: {} });
+    const socket: CmuxSocketRequester = async () => {
+      throw new CmuxSocketUnavailableError("missing socket");
+    };
+    const transport = createCmuxTransport({ socket, runner, env: {} });
 
     let error: unknown;
     try {

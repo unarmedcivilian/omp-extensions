@@ -29,12 +29,15 @@ describe("live smoke script", () => {
       "current",
       "--timeout-ms",
       "45000",
+      "--zip-path",
+      "fixtures/context.zip",
       "--keep-surface",
     ])).toEqual({
       prompt: "Explain the tradeoff.",
       thread: "current",
       timeoutMs: 45_000,
       keepSurface: true,
+      zipPath: "fixtures/context.zip",
     });
   });
 });

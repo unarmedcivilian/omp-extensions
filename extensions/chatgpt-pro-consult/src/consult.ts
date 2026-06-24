@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { createChatGPT } from "codex-chatgpt-control";
 import { blockerText, type ConsultBlocker } from "./blockers.js";
 import {
@@ -10,6 +11,7 @@ export type ChatGptProThread = "new" | "current";
 
 export interface ChatGptProConsultParams {
   prompt: string;
+  zipPath?: string;
   thread?: ChatGptProThread;
   timeoutMs?: number;
   keepSurface?: boolean;
@@ -61,6 +63,7 @@ export interface ChatGptProConsultDeps {
 
 export interface ChatGptClient {
   ask(args: ChatGptAskArgs): Promise<ConsultCommandResult>;
+  runPlan(plan: ConsultSequencePlan): Promise<ConsultCommandResult>;
 }
 
 export interface ChatGptAskArgs {
@@ -73,6 +76,19 @@ export interface ChatGptAskArgs {
   read: { format: "markdown" };
   report: false;
 }
+
+export interface ConsultSequencePlan {
+  name: string;
+  policy: { stopOnError: true; returnPartial: true };
+  steps: ConsultSequenceStep[];
+}
+
+export interface ConsultSequenceStep {
+  id: string;
+  command: string;
+  args?: Record<string, unknown>;
+}
+
 
 export interface ExistingTabPolicy {
   target: { type: "tabId"; tabId: string };
@@ -109,6 +125,8 @@ const ACTION_REQUIRED_BLOCKERS: Record<string, true> = {
   rate_limit: true,
   modal: true,
   selector_drift: true,
+  attachment_processing: true,
+  upload_permission_required: true,
 };
 
 export async function runChatGptProConsult(
@@ -122,6 +140,13 @@ export async function runChatGptProConsult(
   throwIfAborted(signal);
 
   const thread = params.thread ?? "new";
+  let zipPath: string | undefined;
+  try {
+    zipPath = normalizeZipPath(params.zipPath);
+  } catch (error) {
+    return errorResult(error, thread, false, undefined);
+  }
+
   const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = createConsultDeadline(timeoutMs, deps.now ?? (() => new Date()));
   let promptPossiblySubmitted = false;
@@ -173,6 +198,7 @@ export async function runChatGptProConsult(
       waitTimeoutMs,
       deadline,
       signal,
+      zipPath,
     });
 
     const submitted = promptPossiblySubmitted || hasSubmittedPrompt(result);
@@ -302,6 +328,7 @@ async function askWithPreferredProMode(args: {
   waitTimeoutMs: number;
   deadline: ConsultDeadline;
   signal: AbortSignal | undefined;
+  zipPath: string | undefined;
 }): Promise<ConsultCommandResult> {
   const preferred = await askWithMode(args, PREFERRED_PRO_MODE_LABEL);
   if (!isModeFallbackCandidate(preferred)) return preferred;
@@ -318,8 +345,9 @@ async function askWithMode(args: {
   waitTimeoutMs: number;
   deadline: ConsultDeadline;
   signal: AbortSignal | undefined;
+  zipPath: string | undefined;
 }, modeLabel: string): Promise<ConsultCommandResult> {
-  return args.deadline.race("chatgpt.ask", raceAbort(args.client.ask({
+  const request: ChatGptAskArgs = {
     prompt: args.prompt,
     thread: args.thread === "current" ? { type: "current" } : { type: "new" },
     existingTab: args.currentTarget ? existingTabFor(args.currentTarget) : undefined,
@@ -328,7 +356,35 @@ async function askWithMode(args: {
     wait: { timeoutMs: args.waitTimeoutMs },
     read: { format: "markdown" },
     report: false,
-  }), args.signal));
+  };
+  const ask = args.zipPath
+    ? args.client.runPlan(buildZipAskPlan(request, args.zipPath, args.waitTimeoutMs))
+    : args.client.ask(request);
+  return args.deadline.race("chatgpt.ask", raceAbort(ask, args.signal));
+}
+
+function buildZipAskPlan(request: ChatGptAskArgs, zipPath: string, attachTimeoutMs: number): ConsultSequencePlan {
+  return {
+    name: "chatgpt-pro-consult-with-zip",
+    policy: { stopOnError: true, returnPartial: true },
+    steps: [
+      bootstrapStep(request),
+      ...threadSteps(request.thread),
+      { id: "mode", command: "modes.set", args: request.mode },
+      { id: "attach", command: "files.attach", args: { paths: [zipPath], timeoutMs: attachTimeoutMs } },
+      { id: "ask", command: "messages.ask", args: { text: request.prompt, wait: request.wait, read: request.read } },
+    ],
+  };
+}
+
+function bootstrapStep(request: ChatGptAskArgs): ConsultSequenceStep {
+  const args: Record<string, unknown> = { preferExistingTab: request.preferExistingTab };
+  if (request.existingTab !== undefined) args.existingTab = request.existingTab;
+  return { id: "bootstrap", command: "session.bootstrap", args };
+}
+
+function threadSteps(thread: ChatGptAskArgs["thread"]): ConsultSequenceStep[] {
+  return thread.type === "new" ? [{ id: "new", command: "threads.new" }] : [];
 }
 
 function isModeFallbackCandidate(result: ConsultCommandResult): boolean {
@@ -351,6 +407,14 @@ function blockerMessage(result: ConsultCommandResult): string | undefined {
   if (typeof blocker !== "object" || blocker === null) return undefined;
   const message = (blocker as Record<string, unknown>).message;
   return typeof message === "string" ? message : undefined;
+}
+
+function normalizeZipPath(zipPath: string | undefined): string | undefined {
+  if (zipPath === undefined) return undefined;
+  const trimmed = zipPath.trim();
+  if (!trimmed) throw new Error("zip_path must not be empty");
+  if (!/\.zip$/i.test(trimmed)) throw new Error("zip_path must point to a .zip file");
+  return resolve(trimmed);
 }
 
 function isPositiveCount(value: unknown): boolean {

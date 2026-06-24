@@ -136,7 +136,12 @@ export function createCmuxTransport(options: CreateCmuxTransportOptions = {}): C
     },
 
     async eval(surface, code, signal) {
-      return (await runChecked(runner, ["browser", surface, "eval", code], "cmux browser eval", signal)).stdout;
+      try {
+        return parseCmuxEvalValue(await socket("browser.eval", { surface_id: surface, ...callerParams(env, false), script: code }, signal));
+      } catch (error) {
+        if (!isSocketUnavailableError(error) && !isSocketMethodUnavailableError(error)) throw error;
+        return (await runChecked(runner, ["browser", surface, "eval", code], "cmux browser eval", signal)).stdout;
+      }
     },
 
     async press(surface, key, signal) {
@@ -167,6 +172,16 @@ export function parseCmuxSurfaceRef(raw: unknown): string {
     }
   }
   throw new Error(`Unable to parse cmux surface ref from ${formatUnknown(raw)}`);
+}
+
+function parseCmuxEvalValue(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (raw && typeof raw === "object") {
+    const value = field(raw, "value");
+    if (typeof value === "string") return value;
+    if (value !== undefined) return JSON.stringify(value);
+  }
+  return "";
 }
 
 async function openWithCli(url: string, runner: CmuxRunner, env: Record<string, string | undefined>, signal?: AbortSignal): Promise<string> {
@@ -306,7 +321,13 @@ function appendWorkspaceArg(args: string[], env: Record<string, string | undefin
 function isSocketUnavailableError(error: unknown): boolean {
   if (error instanceof CmuxSocketUnavailableError) return true;
   const code = field(error, "code");
-  return code === "ENOENT" || code === "ECONNREFUSED" || code === "EACCES" || code === "EPERM" || code === "ETIMEDOUT" || code === "ECONNRESET";
+  if (code === "ENOENT" || code === "ECONNREFUSED" || code === "EACCES" || code === "EPERM" || code === "ETIMEDOUT" || code === "ECONNRESET") return true;
+  return /\b(?:ENOENT|ECONNREFUSED|EACCES|EPERM|ETIMEDOUT|ECONNRESET)\b/.test(error instanceof Error ? error.message : String(error));
+}
+
+function isSocketMethodUnavailableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\bmethod_not_found\b|Unknown method/i.test(message);
 }
 
 function isAbortError(error: unknown): boolean {

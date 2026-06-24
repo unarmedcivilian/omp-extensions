@@ -24,6 +24,10 @@ export function createChatGptProConsultExtension(
 
     const ConsultParams = z.object({
       prompt: z.string().describe("Prompt to submit to ChatGPT Pro."),
+      zip_path: z
+        .string()
+        .optional()
+        .describe("Absolute or relative path to one local ZIP file to upload before submitting the prompt."),
       thread: z
         .enum(["new", "current"])
         .optional()
@@ -41,6 +45,7 @@ export function createChatGptProConsultExtension(
       async execute(_toolCallId, params, signal): Promise<AgentToolResult<ChatGptProConsultDetails>> {
         const result = await consult({
           prompt: params.prompt,
+          zipPath: params.zip_path,
           thread: params.thread,
           timeoutMs: params.timeout_ms,
           keepSurface: params.keep_surface,

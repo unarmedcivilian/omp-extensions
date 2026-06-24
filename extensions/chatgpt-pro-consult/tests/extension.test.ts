@@ -29,6 +29,7 @@ interface ZLike {
 
 interface ConsultToolParams {
   prompt: string;
+  zip_path?: string;
   thread?: "new" | "current";
   timeout_ms?: number;
   keep_surface?: boolean;
@@ -162,6 +163,11 @@ describe("ChatGPT Pro consult extension", () => {
       kind: "string",
       description: "Prompt to submit to ChatGPT Pro.",
     });
+    expect(tool.parameters.shape?.zip_path).toMatchObject({
+      kind: "string",
+      isOptional: true,
+    });
+    expect(tool.parameters.shape?.zip_path?.description).toContain("ZIP");
     expect(tool.parameters.shape?.thread).toMatchObject({
       kind: "enum",
       values: ["new", "current"],
@@ -205,6 +211,7 @@ describe("ChatGPT Pro consult extension", () => {
       "tool-call-1",
       {
         prompt: "Explain the tradeoff.",
+        zip_path: "/tmp/context.zip",
         thread: "current",
         timeout_ms: 45_000,
         keep_surface: true,
@@ -218,6 +225,7 @@ describe("ChatGPT Pro consult extension", () => {
       thread: "current",
       timeoutMs: 45_000,
       keepSurface: true,
+      zipPath: "/tmp/context.zip",
     });
     expect(calls[0]?.signal).toBe(signal);
     expect(response.content).toEqual([{ type: "text", text: "Answer text" }]);

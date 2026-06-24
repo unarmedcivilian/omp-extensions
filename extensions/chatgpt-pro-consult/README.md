@@ -11,6 +11,7 @@ Parameters:
 | Parameter | Required | Description |
 | --- | --- | --- |
 | `prompt` | Yes | Prompt to send to ChatGPT Pro. Empty prompts are rejected. |
+| `zip_path` | No | Absolute or relative path to one local `.zip` file to upload before submitting the prompt. The path is resolved on the host running the extension. |
 | `thread` | No | `new` opens a fresh ChatGPT thread. `current` uses the selected/current ChatGPT surface. Defaults to `new`. |
 | `timeout_ms` | No | Maximum time to spend selecting Pro mode, waiting for the answer, and reading Markdown. |
 | `keep_surface` | No | Keeps the cmux browser surface open after completion. |
@@ -26,7 +27,7 @@ The tool returns Markdown as text content and structured details with status, wa
 
 ## Surface lifecycle
 
-Extension-owned surfaces close after a successful consult by default. `keep_surface` forces retention. Failures after prompt submission leave the surface open with `surfaceRef`, and login/action-required/rate-limit blockers also leave the surface open so the user can intervene. A missing current surface is a preflight blocker and does not keep an extension-owned surface open.
+Extension-owned surfaces close after a successful consult by default. `keep_surface` forces retention. Failures after prompt submission leave the surface open with `surfaceRef`, and login/action-required/rate-limit blockers also leave the surface open so the user can intervene. ZIP upload processing or upload-permission blockers leave the surface open; local ZIP preflight failures such as missing files do not. A missing current surface is a preflight blocker and does not keep an extension-owned surface open.
 
 ## Development
 
@@ -39,4 +40,10 @@ Manual live smoke is intentionally separate from `check` because it depends on t
 
 ```sh
 bun --cwd extensions/chatgpt-pro-consult smoke -- --prompt "Reply with exactly: omp smoke ok"
+```
+
+Upload a single ZIP during smoke:
+
+```sh
+bun --cwd extensions/chatgpt-pro-consult smoke -- --zip-path /absolute/path/context.zip --prompt "Inspect the uploaded zip and summarize it."
 ```

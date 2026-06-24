@@ -12,6 +12,7 @@ export interface LiveSmokeArgs {
   prompt: string;
   thread?: ChatGptProThread;
   timeoutMs?: number;
+  zipPath?: string;
   keepSurface?: boolean;
 }
 
@@ -25,6 +26,7 @@ export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
   let thread: ChatGptProThread | undefined;
   let timeoutMs: number | undefined;
   let keepSurface: boolean | undefined;
+  let zipPath: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -60,6 +62,18 @@ export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
       continue;
     }
 
+    if (arg.startsWith("--zip-path=")) {
+      zipPath = arg.slice("--zip-path=".length);
+      continue;
+    }
+
+    if (arg === "--zip-path") {
+      const read = readFlagValue(argv, index, "--zip-path");
+      zipPath = read.value;
+      index = read.nextIndex;
+      continue;
+    }
+
     if (arg.startsWith("--timeout-ms=")) {
       timeoutMs = parseTimeoutMs(arg.slice("--timeout-ms=".length));
       continue;
@@ -80,6 +94,7 @@ export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
   const parsed: LiveSmokeArgs = { prompt };
   if (thread) parsed.thread = thread;
   if (timeoutMs !== undefined) parsed.timeoutMs = timeoutMs;
+  if (zipPath !== undefined) parsed.zipPath = zipPath;
   if (keepSurface !== undefined) parsed.keepSurface = keepSurface;
   return parsed;
 }
