@@ -51,6 +51,9 @@ export interface ChatGptProConsultDeps {
     signal?: AbortSignal;
     deadline: ConsultDeadline;
     lifecycle: ConsultLifecycle;
+    openLoadTimeoutMs?: number;
+    openSettleMs?: number;
+    interactionSettleMs?: number;
   }) => CmuxBrowserAdapter;
   createChatGptClient?: (browser: CmuxBrowserAdapter) => ChatGptClient;
   now?: () => Date;
@@ -65,7 +68,7 @@ export interface ChatGptAskArgs {
   thread: { type: "new" } | { type: "current" };
   existingTab: ExistingTabPolicy | undefined;
   preferExistingTab: boolean;
-  mode: { intelligence: "pro"; timeoutMs: number };
+  mode: { intelligence: string; timeoutMs: number };
   wait: { timeoutMs: number };
   read: { format: "markdown" };
   report: false;
@@ -93,6 +96,12 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_MODE_TIMEOUT_MS = 15_000;
 const MIN_MODE_TIMEOUT_MS = 1_000;
 const READ_RESERVE_MS = 5_000;
+const NEW_THREAD_OPEN_LOAD_TIMEOUT_MS = 15_000;
+const NEW_THREAD_OPEN_SETTLE_MS = 2_000;
+const CHATGPT_INTERACTION_SETTLE_MS = 2_000;
+const PREFERRED_PRO_MODE_LABEL = "Pro Extended";
+const LEGACY_PRO_MODE_LABEL = "pro";
+
 const ACTION_REQUIRED_BLOCKERS: Record<string, true> = {
   login: true,
   login_required: true,
@@ -122,7 +131,15 @@ export async function runChatGptProConsult(
     },
   };
 
-  const browser = deps.createBrowser?.({ signal, deadline, lifecycle }) ?? createCmuxBrowserAdapter({ signal, deadline, lifecycle });
+  const browserOptions = {
+    signal,
+    deadline,
+    lifecycle,
+    openLoadTimeoutMs: NEW_THREAD_OPEN_LOAD_TIMEOUT_MS,
+    openSettleMs: NEW_THREAD_OPEN_SETTLE_MS,
+    interactionSettleMs: CHATGPT_INTERACTION_SETTLE_MS,
+  };
+  const browser = deps.createBrowser?.(browserOptions) ?? createCmuxBrowserAdapter(browserOptions);
   const modeTimeoutMs = Math.min(MAX_MODE_TIMEOUT_MS, Math.max(MIN_MODE_TIMEOUT_MS, Math.floor(timeoutMs / 4)));
   const waitTimeoutMs = Math.max(MIN_MODE_TIMEOUT_MS, timeoutMs - modeTimeoutMs - READ_RESERVE_MS);
 
@@ -147,16 +164,16 @@ export async function runChatGptProConsult(
 
   try {
     deadline.throwIfExpired("chatgpt.ask");
-    result = await deadline.race("chatgpt.ask", raceAbort(client.ask({
+    result = await askWithPreferredProMode({
+      client,
       prompt,
-      thread: thread === "current" ? { type: "current" } : { type: "new" },
-      existingTab: currentTarget ? existingTabFor(currentTarget) : undefined,
-      preferExistingTab: thread === "current" ? true : false,
-      mode: { intelligence: "pro", timeoutMs: modeTimeoutMs },
-      wait: { timeoutMs: waitTimeoutMs },
-      read: { format: "markdown" },
-      report: false,
-    }), signal));
+      thread,
+      currentTarget,
+      modeTimeoutMs,
+      waitTimeoutMs,
+      deadline,
+      signal,
+    });
 
     const submitted = promptPossiblySubmitted || hasSubmittedPrompt(result);
     const keptSurface = shouldLeaveSurfaceOpen(result, submitted, params.keepSurface === true);
@@ -274,6 +291,66 @@ export function hasSubmittedPrompt(result: ConsultCommandResult): boolean {
 
   const record = context as Record<string, unknown>;
   return isPositiveCount(record.turnCount) || isPositiveCount(record.assistantTurnCount);
+}
+
+async function askWithPreferredProMode(args: {
+  client: ChatGptClient;
+  prompt: string;
+  thread: ChatGptProThread;
+  currentTarget: SelectedChatGptSurface | undefined;
+  modeTimeoutMs: number;
+  waitTimeoutMs: number;
+  deadline: ConsultDeadline;
+  signal: AbortSignal | undefined;
+}): Promise<ConsultCommandResult> {
+  const preferred = await askWithMode(args, PREFERRED_PRO_MODE_LABEL);
+  if (!isModeFallbackCandidate(preferred)) return preferred;
+  args.deadline.throwIfExpired("chatgpt.ask");
+  return askWithMode(args, LEGACY_PRO_MODE_LABEL);
+}
+
+async function askWithMode(args: {
+  client: ChatGptClient;
+  prompt: string;
+  thread: ChatGptProThread;
+  currentTarget: SelectedChatGptSurface | undefined;
+  modeTimeoutMs: number;
+  waitTimeoutMs: number;
+  deadline: ConsultDeadline;
+  signal: AbortSignal | undefined;
+}, modeLabel: string): Promise<ConsultCommandResult> {
+  return args.deadline.race("chatgpt.ask", raceAbort(args.client.ask({
+    prompt: args.prompt,
+    thread: args.thread === "current" ? { type: "current" } : { type: "new" },
+    existingTab: args.currentTarget ? existingTabFor(args.currentTarget) : undefined,
+    preferExistingTab: args.thread === "current" ? true : false,
+    mode: { intelligence: modeLabel, timeoutMs: args.modeTimeoutMs },
+    wait: { timeoutMs: args.waitTimeoutMs },
+    read: { format: "markdown" },
+    report: false,
+  }), args.signal));
+}
+
+function isModeFallbackCandidate(result: ConsultCommandResult): boolean {
+  if (result.ok || hasSubmittedPrompt(result)) return false;
+  const message = blockerMessage(result);
+  if (message === undefined || !message.includes(`Mode option "${PREFERRED_PRO_MODE_LABEL}"`)) return false;
+  const commands = stepCommands(result);
+  return commands.length === 0 || (commands.includes("modes.set") && !commands.includes("messages.ask"));
+}
+
+function stepCommands(result: ConsultCommandResult): string[] {
+  if (!Array.isArray(result.steps)) return [];
+  return result.steps
+    .map(step => (typeof step === "object" && step !== null ? (step as Record<string, unknown>).command : undefined))
+    .filter((command): command is string => typeof command === "string");
+}
+
+function blockerMessage(result: ConsultCommandResult): string | undefined {
+  const blocker = result.blocker;
+  if (typeof blocker !== "object" || blocker === null) return undefined;
+  const message = (blocker as Record<string, unknown>).message;
+  return typeof message === "string" ? message : undefined;
 }
 
 function isPositiveCount(value: unknown): boolean {

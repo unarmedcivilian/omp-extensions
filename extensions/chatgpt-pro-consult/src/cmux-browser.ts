@@ -23,6 +23,9 @@ export interface CreateCmuxBrowserAdapterOptions {
   signal?: AbortSignal;
   deadline?: ConsultDeadline;
   lifecycle?: ConsultLifecycle;
+  openLoadTimeoutMs?: number;
+  openSettleMs?: number;
+  interactionSettleMs?: number;
   surfaceStore?: CmuxSurfaceStore;
 }
 
@@ -33,6 +36,7 @@ const CHATGPT_HOSTS: Record<string, true> = {
 };
 
 const DEFAULT_CHATGPT_URL = "https://chatgpt.com/";
+const DEFAULT_OPEN_LOAD_TIMEOUT_MS = 15_000;
 const DEFAULT_SURFACE_STORE: CmuxSurfaceStore = {};
 
 
@@ -53,6 +57,30 @@ export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOption
     primarySurface ??= surface;
   }
 
+  function openLoadTimeoutMs(): number {
+    if (options.openLoadTimeoutMs !== undefined) return Math.max(0, options.openLoadTimeoutMs);
+    return isPositiveMs(options.openSettleMs) ? DEFAULT_OPEN_LOAD_TIMEOUT_MS : 0;
+  }
+
+  async function waitForOpenedPage(surface: string): Promise<void> {
+    const loadTimeoutMs = openLoadTimeoutMs();
+    if (loadTimeoutMs > 0) {
+      await raceTransport("cmux.browser.open_load", transport.waitForLoad(surface, loadTimeoutMs, options.signal))
+        .catch(error => {
+          if (shouldRethrowOpenWaitError(error)) throw error;
+        });
+    }
+
+    if (isPositiveMs(options.openSettleMs)) {
+      await raceTransport("cmux.browser.open_settle", sleep(options.openSettleMs, options.signal));
+    }
+  }
+
+  function shouldRethrowOpenWaitError(error: unknown): boolean {
+    if (options.signal?.aborted === true || isAbortError(error)) return true;
+    return options.deadline?.remainingMs() === 0;
+  }
+
   function pageFor(surface: SelectedChatGptSurface, ownsSurface = false): PageLike {
     return createCmuxPage({
       surface: surface.surface,
@@ -61,6 +89,7 @@ export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOption
       signal: options.signal,
       deadline: options.deadline,
       lifecycle: options.lifecycle,
+      interactionSettleMs: options.interactionSettleMs,
       owned: ownsSurface,
       onClose: () => ownedSurfaces.delete(surface.surface),
     });
@@ -73,6 +102,7 @@ export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOption
     surfacesByTabId.set(surface, openedSurface);
     selectedTabId = surface;
     trackPrimary(surface);
+    await waitForOpenedPage(surface);
     return pageFor(openedSurface, true);
   }
 
@@ -159,6 +189,30 @@ export function createCmuxBrowserAdapter(options: CreateCmuxBrowserAdapterOption
   };
 
   return browser;
+}
+
+function isPositiveMs(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted === true) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError"
+    || error instanceof Error && error.name === "AbortError";
 }
 
 function isChatGptUrl(url: string | undefined): boolean {

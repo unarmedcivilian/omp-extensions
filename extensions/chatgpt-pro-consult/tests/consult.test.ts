@@ -66,7 +66,7 @@ describe("runChatGptProConsult", () => {
       thread: { type: "new" },
       existingTab: undefined,
       preferExistingTab: false,
-      mode: { intelligence: "pro", timeoutMs: 15_000 },
+      mode: { intelligence: "Pro Extended", timeoutMs: 15_000 },
       wait: { timeoutMs: 70_000 },
       read: { format: "markdown" },
       report: false,
@@ -74,6 +74,21 @@ describe("runChatGptProConsult", () => {
     expect(result.ok).toBe(true);
     expect(result.markdown).toBe("omp smoke ok");
     expect(result.contentText).toBe("omp smoke ok");
+  });
+
+  test("configures new-thread browser pages to settle after opening before SDK submission", async () => {
+    let openSettleMs: unknown;
+    const deps = depsReturning({ ok: true, status: "ok", output_text: "done", warnings: [], context: { timestamp: "t" } });
+    const baseCreateBrowser = deps.createBrowser;
+    deps.createBrowser = options => {
+      openSettleMs = (options as { openSettleMs?: number }).openSettleMs;
+      return baseCreateBrowser(options);
+    };
+
+    const result = await runChatGptProConsult({ prompt: "Hi" }, deps);
+
+    expect(result.ok).toBe(true);
+    expect(openSettleMs).toBeGreaterThan(0);
   });
 
   test("pins current-thread consults to the preflight-selected cmux surface", async () => {
@@ -92,11 +107,72 @@ describe("runChatGptProConsult", () => {
         requireChatGPT: true,
       },
       preferExistingTab: true,
-      mode: { intelligence: "pro", timeoutMs: 15_000 },
+      mode: { intelligence: "Pro Extended", timeoutMs: 15_000 },
       wait: { timeoutMs: 100_000 },
       read: { format: "markdown" },
       report: false,
     }]);
+  });
+
+  test("falls back to legacy Pro mode label when Pro Extended is unavailable before submission", async () => {
+    let attempts = 0;
+    const deps = depsReturning(() => {
+      attempts += 1;
+      if (attempts === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: "partial",
+          warnings: [],
+          steps: [
+            { command: "session.bootstrap", ok: true, status: "ok" },
+            { command: "modes.set", ok: false, status: "unsupported" },
+          ],
+          blocker: {
+            kind: "selector_drift",
+            code: "visible_candidate_not_found",
+            message: "Mode option \"Pro Extended\" was not found or was ambiguous.",
+          },
+          context: { timestamp: "t" },
+        });
+      }
+      return Promise.resolve({ ok: true, status: "ok", output_text: "done", warnings: [], context: { timestamp: "t" } });
+    });
+
+    const result = await runChatGptProConsult({ prompt: "Hi" }, deps);
+
+    expect(result.ok).toBe(true);
+    expect(deps.calls).toHaveLength(2);
+    expect(deps.calls).toMatchObject([
+      { mode: { intelligence: "Pro Extended" } },
+      { mode: { intelligence: "pro" } },
+    ]);
+    expect(deps.closeCalls).toBe(1);
+  });
+
+  test("does not retry Pro mode fallback after messages.ask has run", async () => {
+    const deps = depsReturning({
+      ok: false,
+      status: "partial",
+      warnings: [],
+      steps: [
+        { command: "session.bootstrap", ok: true, status: "ok" },
+        { command: "modes.set", ok: false, status: "unsupported" },
+        { command: "messages.ask", ok: false, status: "blocked" },
+      ],
+      blocker: {
+        kind: "selector_drift",
+        code: "visible_candidate_not_found",
+        message: "Mode option \"Pro Extended\" was not found or was ambiguous.",
+      },
+      context: { timestamp: "t" },
+    });
+
+    const result = await runChatGptProConsult({ prompt: "Hi" }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(deps.calls).toHaveLength(1);
+    expect(result.details.keptSurface).toBe(true);
+    expect(deps.closeCalls).toBe(0);
   });
 
   test("returns a structured blocker when current-thread preflight has no selected ChatGPT surface", async () => {

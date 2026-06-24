@@ -13,6 +13,7 @@ interface FakeSurfaceState {
 class FakeCmuxTransport implements CmuxTransport {
   readonly surfaces = new Map<string, FakeSurfaceState>();
   readonly openedUrls: string[] = [];
+  readonly loadWaits: Array<{ surface: string; timeoutMs: number }> = [];
   readonly closedSurfaces: string[] = [];
   resolveCurrentCalls = 0;
   nextSurfaceNumber = 1;
@@ -39,7 +40,10 @@ class FakeCmuxTransport implements CmuxTransport {
     this.state(surface).url = url;
   }
 
-  async waitForLoad(): Promise<void> {}
+  async waitForLoad(surface: string, timeoutMs: number): Promise<void> {
+    this.loadWaits.push({ surface, timeoutMs });
+    this.state(surface).url = "https://chatgpt.com/c/loaded";
+  }
 
   async getUrl(surface: string): Promise<string> {
     return this.state(surface).url;
@@ -94,6 +98,17 @@ describe("cmux browser adapter", () => {
     expect(browser.primarySurfaceRef()).toBe("surface:1");
     const selected = await browser.tabs?.selected?.() as { tabId?: string } | undefined;
     expect(selected?.tabId).toBe("surface:1");
+  });
+
+  test("tabs.create waits for a newly opened ChatGPT page before exposing it to the SDK", async () => {
+    const transport = new FakeCmuxTransport();
+    const browser = createCmuxBrowserAdapter({ transport, openLoadTimeoutMs: 12_000 });
+
+    const page = await browser.tabs?.create?.("https://chatgpt.com/");
+    if (page === undefined) throw new Error("expected tabs.create to return a page");
+
+    expect(transport.loadWaits).toEqual([{ surface: "surface:1", timeoutMs: 12_000 }]);
+    await expect(page.url?.()).resolves.toBe("https://chatgpt.com/c/loaded");
   });
 
   test("opened ChatGPT surfaces are rediscoverable as user tabs", async () => {

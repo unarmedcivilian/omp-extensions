@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createChatGPT } from "codex-chatgpt-control";
 import { createCmuxBrowserAdapter } from "../src/cmux-browser.js";
 import { createCmuxPage } from "../src/cmux-page.js";
+import { runChatGptProConsult } from "../src/consult.js";
 import type { CmuxTransport } from "../src/cmux.js";
 
 const RESULT_UNDEFINED = "__cmux_page_undefined__";
@@ -287,6 +288,144 @@ class ScriptAwareFakeTransport implements CmuxTransport {
   }
 }
 
+class RuntimeDomElement {
+  readonly nodeType = 1;
+  readonly children: RuntimeDomElement[] = [];
+  readonly style = { visibility: "visible", display: "block", opacity: "1" };
+  readonly tagName: string;
+  value = "";
+  textContent: string;
+  innerText: string;
+  dispatched: Array<Record<string, unknown>> = [];
+
+  constructor(
+    tagName: string,
+    private readonly attrs: Record<string, string> = {},
+    text = "",
+    private readonly visible = true,
+  ) {
+    this.tagName = tagName.toUpperCase();
+    this.textContent = text;
+    this.innerText = text;
+    if (!visible) this.style.display = "none";
+  }
+
+  get isContentEditable(): boolean {
+    return this.attrs.contenteditable === "true";
+  }
+
+  getAttribute(name: string): string | null {
+    return this.attrs[name] ?? null;
+  }
+
+  hasAttribute(name: string): boolean {
+    return Object.hasOwn(this.attrs, name);
+  }
+
+  getBoundingClientRect(): DOMRect {
+    const rect = this.visible
+      ? { x: 0, y: 0, width: 120, height: 24, top: 0, right: 120, bottom: 24, left: 0 }
+      : { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0 };
+    return { ...rect, toJSON: () => rect } as DOMRect;
+  }
+
+  querySelectorAll(selector: string): RuntimeDomElement[] {
+    return queryRuntimeElements(this.children, selector);
+  }
+
+  click(): void {
+    this.dispatched.push({ type: "clickMethod" });
+  }
+
+  focus(): void {
+    this.dispatched.push({ type: "focusMethod" });
+  }
+
+  dispatchEvent(event: Event): boolean {
+    const record = event as Event & Record<string, unknown>;
+    this.dispatched.push(Object.fromEntries(
+      [
+        ["type", event.type],
+        ["ctor", event.constructor.name],
+        ["button", record.button],
+        ["buttons", record.buttons],
+        ["pointerType", record.pointerType],
+        ["isPrimary", record.isPrimary],
+        ["clientX", record.clientX],
+        ["clientY", record.clientY],
+      ].filter((entry): entry is [string, unknown] => entry[1] !== undefined),
+    ));
+    return true;
+  }
+}
+
+class RuntimeDomTransport implements CmuxTransport {
+  readonly hiddenComposer = new RuntimeDomElement("textarea", { "aria-label": "Chat with ChatGPT" }, "", false);
+  readonly visibleComposer = new RuntimeDomElement("div", {
+    role: "textbox",
+    "aria-label": "Chat with ChatGPT",
+    contenteditable: "true",
+  });
+  readonly modeButton = new RuntimeDomElement("button", {}, "Pro Extended");
+  readonly extraElements: RuntimeDomElement[] = [];
+
+  async open(): Promise<string> { return "surface:1"; }
+  async goto(): Promise<void> {}
+  async waitForLoad(): Promise<void> {}
+  async getUrl(): Promise<string> { return "https://chatgpt.com/"; }
+  async getTitle(): Promise<string> { return "ChatGPT"; }
+  async getText(): Promise<string> { return ""; }
+  async getHtml(): Promise<string> { return ""; }
+  async press(): Promise<void> {}
+  async close(): Promise<void> {}
+  async resolveCurrentSurface(): Promise<string | undefined> { return "surface:1"; }
+
+  async eval(_surface: string, code: string): Promise<string> {
+    const document = {
+      querySelectorAll: (selector: string) => queryRuntimeElements([this.hiddenComposer, this.visibleComposer, this.modeButton, ...this.extraElements], selector),
+      getElementById: () => null,
+    };
+    const FakeEvent = class Event {
+      constructor(readonly type: string, init: Record<string, unknown> = {}) {
+        Object.assign(this, init);
+      }
+    };
+    const FakeInputEvent = class InputEvent extends FakeEvent {};
+    const FakeMouseEvent = class MouseEvent extends FakeEvent {};
+    const FakePointerEvent = class PointerEvent extends FakeMouseEvent {};
+    const window = {
+      getComputedStyle: (element: RuntimeDomElement) => element.style,
+      MouseEvent: FakeMouseEvent,
+      PointerEvent: FakePointerEvent,
+    };
+    return new Function("document", "Element", "window", "InputEvent", "Event", "MouseEvent", "PointerEvent", `return (${code})`)(
+      document,
+      RuntimeDomElement,
+      window,
+      FakeInputEvent,
+      FakeEvent,
+      FakeMouseEvent,
+      FakePointerEvent,
+    ) as string;
+  }
+}
+
+function queryRuntimeElements(elements: RuntimeDomElement[], selector: string): RuntimeDomElement[] {
+  return elements.filter(element => matchesRuntimeSelector(element, selector));
+}
+
+function matchesRuntimeSelector(element: RuntimeDomElement, selector: string): boolean {
+  return selector.split(",").some(part => {
+    const trimmed = part.trim();
+    if (trimmed === "*") return true;
+    if (trimmed === "textarea") return element.tagName === "TEXTAREA";
+    if (trimmed === "[contenteditable='true']" || trimmed === "[contenteditable=\"true\"]") {
+      return element.getAttribute("contenteditable") === "true";
+    }
+    return false;
+  });
+}
+
 describe("cmux page adapter", () => {
   test("page.evaluate sends eval code through transport and returns the parsed result", async () => {
     const transport = new ScriptAwareFakeTransport();
@@ -381,6 +520,90 @@ describe("cmux page adapter", () => {
     expect(transport.operations).toEqual(["fill:composer:hello composer", "event:composer:input", "event:composer:change"]);
   });
 
+  test("runtime role locators ignore hidden duplicate textboxes before filling composer", async () => {
+    const transport = new RuntimeDomTransport();
+    const page = createCmuxPage({ surface: "surface:1", transport });
+    const composer = page.getByRole?.("textbox", { name: /Chat with ChatGPT/i });
+    if (composer === undefined) throw new Error("missing composer locator");
+
+    await expect(composer.fill?.("visible composer text")).resolves.toBeUndefined();
+
+    expect(transport.visibleComposer.textContent).toBe("visible composer text");
+    expect(transport.hiddenComposer.value).toBe("");
+    expect(transport.visibleComposer.dispatched.map(event => event.type)).toEqual(["input", "change"]);
+  });
+
+  test("runtime role accessible names avoid expensive innerText layout reads", async () => {
+    const transport = new RuntimeDomTransport();
+    const sendButton = new RuntimeDomElement("button", {}, "Send prompt");
+    Object.defineProperty(sendButton, "innerText", {
+      configurable: true,
+      get() {
+        throw new Error("innerText forced layout");
+      },
+    });
+    transport.extraElements.push(sendButton);
+    const page = createCmuxPage({ surface: "surface:1", transport });
+    const locator = page.getByRole?.("button", { name: /Send prompt/i });
+    if (locator === undefined) throw new Error("missing send button locator");
+
+    await expect(locator.count?.()).resolves.toBe(1);
+  });
+
+  test("runtime textbox clicks focus without pointer dispatch", async () => {
+    const transport = new RuntimeDomTransport();
+    const page = createCmuxPage({ surface: "surface:1", transport });
+    const composer = page.getByRole?.("textbox", { name: /Chat with ChatGPT/i });
+    if (composer === undefined) throw new Error("missing composer locator");
+
+    await expect(composer.click?.()).resolves.toBeUndefined();
+
+    expect(transport.visibleComposer.dispatched).toEqual([{ type: "focusMethod" }]);
+  });
+
+  test("runtime click dispatches pointer and mouse events at the element center", async () => {
+    const transport = new RuntimeDomTransport();
+    const page = createCmuxPage({ surface: "surface:1", transport });
+    const modeButton = page.getByRole?.("button", { name: "Pro Extended", exact: true });
+    if (modeButton === undefined) throw new Error("missing mode button locator");
+
+    await expect(modeButton.click?.()).resolves.toBeUndefined();
+
+    expect(transport.modeButton.dispatched).toEqual([
+      { type: "pointerdown", ctor: "PointerEvent", button: 0, buttons: 1, pointerType: "mouse", isPrimary: true, clientX: 60, clientY: 12 },
+      { type: "mousedown", ctor: "MouseEvent", button: 0, buttons: 1, clientX: 60, clientY: 12 },
+      { type: "pointerup", ctor: "PointerEvent", button: 0, buttons: 0, pointerType: "mouse", isPrimary: true, clientX: 60, clientY: 12 },
+      { type: "mouseup", ctor: "MouseEvent", button: 0, buttons: 0, clientX: 60, clientY: 12 },
+      { type: "click", ctor: "PointerEvent", button: 0, buttons: 0, pointerType: "mouse", isPrimary: true, clientX: 60, clientY: 12 },
+    ]);
+  });
+
+  test("page evaluate interactions settle before the SDK continues", async () => {
+    const transport = new RuntimeDomTransport();
+    const raced: string[] = [];
+    const deadline = {
+      remainingMs: () => 1_000,
+      throwIfExpired: () => {},
+      race: async <T>(operation: string, promise: Promise<T>) => {
+        raced.push(operation);
+        return promise;
+      },
+    };
+    const page = createCmuxPage({
+      surface: "surface:1",
+      transport,
+      deadline,
+      interactionSettleMs: 1,
+    } as Parameters<typeof createCmuxPage>[0] & { interactionSettleMs: number });
+
+    await expect(page.evaluate(() => {
+      document.querySelectorAll("button")[0]?.click();
+      return true;
+    })).resolves.toBe(true);
+
+    expect(raced).toContain("cmux.browser.interaction_settle");
+  });
+
   test("SDK adapter opens, selects mode, fills composer, submits, and reads assistant markdown", async () => {
     const transport = new ScriptAwareFakeTransport();
     let submitted = 0;
@@ -409,5 +632,36 @@ describe("cmux page adapter", () => {
     expect(transport.operations).toContain("submit");
     expect(transport.operations).toContain("read:assistant:markdown");
     expect(transport.messages.at(-1)).toMatchObject({ role: "assistant", text: "omp smoke ok" });
+  });
+
+  test("consult runner retries Pro Extended mode through the real SDK before submitting once", async () => {
+    const transport = new ScriptAwareFakeTransport();
+    let submitted = 0;
+
+    const result = await runChatGptProConsult({
+      prompt: "Reply with exactly: omp smoke ok",
+      timeoutMs: 20_000,
+    }, {
+      createBrowser: ({ signal, deadline, lifecycle }) => createCmuxBrowserAdapter({
+        transport,
+        signal,
+        deadline,
+        lifecycle: {
+          markPromptSubmitted() {
+            submitted += 1;
+            lifecycle.markPromptSubmitted();
+          },
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.markdown).toBe("omp smoke ok");
+    expect(submitted).toBe(1);
+    expect(transport.operations.filter(operation => operation === "submit")).toHaveLength(1);
+    expect(transport.operations).toContain("mode:Pro");
+    expect(transport.operations).toContain("fill:composer:Reply with exactly: omp smoke ok");
+    expect(result.details.keptSurface).toBe(false);
+    expect(transport.closedSurfaces).toContain("surface:1");
   });
 });

@@ -15,6 +15,7 @@ export interface CreateCmuxPageOptions {
   signal?: AbortSignal;
   deadline?: ConsultDeadline;
   lifecycle?: ConsultLifecycle;
+  interactionSettleMs?: number;
   owned?: boolean;
   onClose?: () => void;
 }
@@ -49,6 +50,11 @@ export function createCmuxPage(options: CreateCmuxPageOptions): CmuxPage {
     return parseCmuxJsonResult<T>(raw);
   }
 
+  async function settleAfterInteraction(): Promise<void> {
+    if (!isPositiveMs(options.interactionSettleMs)) return;
+    await race("cmux.browser.interaction_settle", sleep(options.interactionSettleMs, options.signal));
+  }
+
   const page: CmuxPage = {
     id: tabId,
     tabId,
@@ -57,7 +63,9 @@ export function createCmuxPage(options: CreateCmuxPageOptions): CmuxPage {
     title: async () => race("cmux.browser.get_title", options.transport.getTitle(options.surface, options.signal)),
     content: async () => race("cmux.browser.get_html", options.transport.getHtml(options.surface, "html", options.signal)),
     evaluate: async <T, A = unknown>(fn: (arg: A) => T | Promise<T>, arg?: A) => {
-      return evalJson<T>("cmux.browser.eval", pageEvaluateCode(fn, arg));
+      const result = await evalJson<T>("cmux.browser.eval", pageEvaluateCode(fn, arg));
+      if (isInteractionEvaluate(fn)) await settleAfterInteraction();
+      return result;
     },
     waitForTimeout: async (ms: number) => {
       await race("cmux.browser.wait_for_timeout", sleep(ms, options.signal));
@@ -68,23 +76,23 @@ export function createCmuxPage(options: CreateCmuxPageOptions): CmuxPage {
         await race("cmux.browser.press", options.transport.press(options.surface, key, options.signal));
       },
     },
-    locator: (selector: string) => createLocator({ type: "css", selector }, evalJson, options.lifecycle),
+    locator: (selector: string) => createLocator({ type: "css", selector }, evalJson, options.lifecycle, settleAfterInteraction),
     getByRole: (role: string, locatorOptions: Record<string, unknown> = {}) => createLocator({
       type: "role",
       role,
       name: serializeOptionalMatcher(locatorOptions.name),
       exact: locatorOptions.exact === true,
-    }, evalJson, options.lifecycle),
+    }, evalJson, options.lifecycle, settleAfterInteraction),
     getByText: (text: string | RegExp, locatorOptions: Record<string, unknown> = {}) => createLocator({
       type: "text",
       text: serializeMatcher(text),
       exact: locatorOptions.exact === true,
-    }, evalJson, options.lifecycle),
+    }, evalJson, options.lifecycle, settleAfterInteraction),
     getByPlaceholder: (text: string | RegExp, locatorOptions: Record<string, unknown> = {}) => createLocator({
       type: "placeholder",
       text: serializeMatcher(text),
       exact: locatorOptions.exact === true,
-    }, evalJson, options.lifecycle),
+    }, evalJson, options.lifecycle, settleAfterInteraction),
     goto: async (url: string) => {
       await race("cmux.browser.goto", options.transport.goto(options.surface, url, options.signal));
     },
@@ -117,20 +125,22 @@ function createLocator(
   descriptor: LocatorDescriptor,
   evalJson: <T>(operation: string, code: string) => Promise<T>,
   lifecycle: ConsultLifecycle | undefined,
+  settleAfterInteraction: () => Promise<void>,
 ): LocatorLike {
   const locator: LocatorLike = {
     count: () => evalLocator<number>(descriptor, "count", evalJson),
-    nth: (index: number) => createLocator({ type: "nth", base: descriptor, index }, evalJson, lifecycle),
-    first: () => createLocator({ type: "nth", base: descriptor, index: 0 }, evalJson, lifecycle),
-    last: () => createLocator({ type: "nth", base: descriptor, index: -1 }, evalJson, lifecycle),
+    nth: (index: number) => createLocator({ type: "nth", base: descriptor, index }, evalJson, lifecycle, settleAfterInteraction),
+    first: () => createLocator({ type: "nth", base: descriptor, index: 0 }, evalJson, lifecycle, settleAfterInteraction),
+    last: () => createLocator({ type: "nth", base: descriptor, index: -1 }, evalJson, lifecycle, settleAfterInteraction),
     filter: (options: Record<string, unknown>) => {
       const hasText = serializeOptionalMatcher(options.hasText);
-      return createLocator({ type: "filter", base: descriptor, hasText }, evalJson, lifecycle);
+      return createLocator({ type: "filter", base: descriptor, hasText }, evalJson, lifecycle, settleAfterInteraction);
     },
-    locator: (selector: string) => createLocator({ type: "descendant", base: descriptor, selector }, evalJson, lifecycle),
+    locator: (selector: string) => createLocator({ type: "descendant", base: descriptor, selector }, evalJson, lifecycle, settleAfterInteraction),
     click: async () => {
       if (isSendControlDescriptor(descriptor)) lifecycle?.markPromptSubmitted();
       await evalLocator<void>(descriptor, "click", evalJson);
+      await settleAfterInteraction();
     },
     fill: (value: string) => evalLocator<void>(descriptor, "fill", evalJson, value),
     textContent: () => evalLocator<string | null>(descriptor, "textContent", evalJson),
@@ -162,6 +172,14 @@ function pageEvaluateCode<T, A>(fn: (arg: A) => T | Promise<T>, arg: A | undefin
   })()`;
 }
 
+function isInteractionEvaluate<T, A>(fn: (arg: A) => T | Promise<T>): boolean {
+  return /\.click\s*\(/.test(fn.toString());
+}
+
+function isPositiveMs(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
 function locatorOperationCode(descriptor: LocatorDescriptor, operation: string, value: string | undefined): string {
   const descriptorJson = JSON.stringify(descriptor);
   const valueJson = JSON.stringify(value);
@@ -176,7 +194,7 @@ function locatorOperationCode(descriptor: LocatorDescriptor, operation: string, 
   const one = () => requireOne(elements, operation);
   let result;
   if (operation === "count") result = elements.length;
-  else if (operation === "click") { one().click(); result = undefined; }
+  else if (operation === "click") { clickElement(one()); result = undefined; }
   else if (operation === "fill") { fillElement(one(), value ?? ""); result = undefined; }
   else if (operation === "textContent") result = one().textContent;
   else if (operation === "innerText") result = one().innerText ?? one().textContent ?? "";
@@ -206,9 +224,9 @@ function locatorRuntimeSource(): string {
   const elementMatches = typeof Element === "undefined" ? undefined : Element.prototype.matches;
   function resolveLocator(descriptor, roots = [document]) {
     if (descriptor.type === "css") return queryAll(roots, descriptor.selector);
-    if (descriptor.type === "role") return allElements(roots).filter(element => roleOf(element) === descriptor.role && matchesName(accessibleName(element, descriptor.role), descriptor.name, descriptor.exact));
+    if (descriptor.type === "role") return allElements(roots).filter(element => isLocatorCandidateVisible(element) && roleOf(element) === descriptor.role && matchesName(accessibleName(element, descriptor.role), descriptor.name, descriptor.exact));
     if (descriptor.type === "text") return leafTextElements(roots).filter(element => matchesName(visibleText(element), descriptor.text, descriptor.exact));
-    if (descriptor.type === "placeholder") return allElements(roots).filter(element => matchesName(element.getAttribute("placeholder") ?? "", descriptor.text, descriptor.exact));
+    if (descriptor.type === "placeholder") return allElements(roots).filter(element => isLocatorCandidateVisible(element) && matchesName(element.getAttribute("placeholder") ?? "", descriptor.text, descriptor.exact));
     if (descriptor.type === "descendant") return queryAll(resolveLocator(descriptor.base, roots), descriptor.selector);
     if (descriptor.type === "filter") return resolveLocator(descriptor.base, roots).filter(element => descriptor.hasText === undefined || matchesName(visibleText(element), descriptor.hasText, false));
     if (descriptor.type === "nth") {
@@ -232,7 +250,7 @@ function locatorRuntimeSource(): string {
     return unique(found);
   }
   function leafTextElements(roots) {
-    return allElements(roots).filter(element => visibleText(element).length > 0 && !Array.from(element.children).some(child => visibleText(child).length > 0 && matchesName(visibleText(child), { kind: "string", value: visibleText(element) }, false)));
+    return allElements(roots).filter(element => isLocatorCandidateVisible(element) && visibleText(element).length > 0 && !Array.from(element.children).some(child => isLocatorCandidateVisible(child) && visibleText(child).length > 0 && matchesName(visibleText(child), { kind: "string", value: visibleText(element) }, false)));
   }
   function unique(elements) { return Array.from(new Set(elements)); }
   function roleOf(element) {
@@ -259,15 +277,16 @@ function locatorRuntimeSource(): string {
     if (aria !== null && aria.trim().length > 0) return aria;
     const labelledBy = element.getAttribute("aria-labelledby");
     if (labelledBy !== null) {
-      const text = labelledBy.split(/\\s+/).map(id => document.getElementById(id)?.innerText ?? document.getElementById(id)?.textContent ?? "").join(" ").trim();
+      const text = labelledBy.split(/\\s+/).map(id => document.getElementById(id)?.textContent ?? "").join(" ").trim();
       if (text.length > 0) return text;
     }
     if (role === "textbox") {
       const placeholder = element.getAttribute("placeholder");
       if (placeholder !== null && placeholder.trim().length > 0) return placeholder;
     }
-    return visibleText(element);
+    return accessibleText(element);
   }
+  function accessibleText(element) { return (element.textContent ?? "").replace(/\\s+/g, " ").trim(); }
   function visibleText(element) { return (element.innerText ?? element.textContent ?? "").replace(/\\s+/g, " ").trim(); }
   function matchesName(value, matcher, exact) {
     if (matcher === undefined) return true;
@@ -277,9 +296,47 @@ function locatorRuntimeSource(): string {
     return exact === true ? text === wanted : text.toLocaleLowerCase().includes(wanted.toLocaleLowerCase());
   }
   function isVisible(element) {
+    return isLocatorCandidateVisible(element);
+  }
+  function isLocatorCandidateVisible(element) {
+    if (element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") return false;
+    if (typeof element.closest === "function" && element.closest("[hidden],[aria-hidden='true']") !== null) return false;
     const rect = element.getBoundingClientRect();
     const style = window.getComputedStyle(element);
-    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none" && style.opacity !== "0" && element.getAttribute("aria-hidden") !== "true";
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none" && style.opacity !== "0";
+  }
+  function isTextEntryElement(element) {
+    const tag = element.tagName.toLowerCase();
+    const type = (element.getAttribute("type") ?? "").toLowerCase();
+    return element.isContentEditable
+      || tag === "textarea"
+      || tag === "input" && ["search", "text", "email", "url", "tel", "password", "number", ""].includes(type);
+  }
+  function focusElement(element) {
+    if (typeof element.focus === "function") {
+      element.focus({ preventScroll: true });
+      return;
+    }
+    element.dispatchEvent(new Event("focus", { bubbles: false }));
+    element.dispatchEvent(new Event("focusin", { bubbles: true }));
+  }
+  function clickElement(element) {
+    if (isTextEntryElement(element)) {
+      focusElement(element);
+      return;
+    }
+    const rect = element.getBoundingClientRect();
+    const clientX = Math.round(rect.left + rect.width / 2);
+    const clientY = Math.round(rect.top + rect.height / 2);
+    const MouseCtor = window.MouseEvent;
+    const PointerCtor = window.PointerEvent ?? MouseCtor;
+    const base = { bubbles: true, cancelable: true, view: window, clientX, clientY, button: 0 };
+    const pointerBase = { ...base, pointerType: "mouse", pointerId: 1, isPrimary: true };
+    element.dispatchEvent(new PointerCtor("pointerdown", { ...pointerBase, buttons: 1 }));
+    element.dispatchEvent(new MouseCtor("mousedown", { ...base, buttons: 1 }));
+    element.dispatchEvent(new PointerCtor("pointerup", { ...pointerBase, buttons: 0 }));
+    element.dispatchEvent(new MouseCtor("mouseup", { ...base, buttons: 0 }));
+    element.dispatchEvent(new PointerCtor("click", { ...pointerBase, buttons: 0, detail: 1 }));
   }
   function requireOne(elements, operation) {
     if (elements.length !== 1) throw new Error("cmux locator " + operation + " expected exactly one element, found " + elements.length);
