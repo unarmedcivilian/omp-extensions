@@ -2,6 +2,9 @@
 node_modules/
 bun.lock
 dist/
+!extensions/accordion/dist/
+!extensions/accordion/dist/client/
+!extensions/accordion/dist/client/**
 artifacts/
 .worktrees/
 reference/

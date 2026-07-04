@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Accordion</title>
+    <!-- __accordion runtime metadata is served from /__accordion/meta -->
+    <style>
+      :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #080b12; color: #edf2ff; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top left, #17213d 0, #080b12 42rem); }
+      main { display: grid; grid-template-columns: minmax(18rem, 22rem) 1fr; gap: 1rem; min-height: 100vh; padding: 1rem; }
+      aside, section { border: 1px solid #26324f; border-radius: 1rem; background: rgba(8, 11, 18, 0.82); box-shadow: 0 1rem 3rem rgba(0, 0, 0, 0.25); }
+      aside { padding: 1rem; position: sticky; top: 1rem; height: calc(100vh - 2rem); overflow: auto; }
+      section { padding: 1rem; overflow: hidden; }
+      h1, h2 { margin: 0; letter-spacing: -0.04em; }
+      h1 { font-size: 1.7rem; }
+      h2 { font-size: 1rem; color: #b9c7ee; }
+      .status { margin: 1rem 0; padding: 0.75rem; border-radius: 0.75rem; background: #11182a; color: #cbd7ff; font-size: 0.9rem; }
+      .metric { display: flex; justify-content: space-between; gap: 1rem; padding: 0.5rem 0; border-bottom: 1px solid #1b2742; }
+      .metric:last-child { border-bottom: 0; }
+      .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+      button { border: 1px solid #40517e; border-radius: 0.65rem; background: #17213d; color: #edf2ff; padding: 0.45rem 0.7rem; cursor: pointer; }
+      button:hover { border-color: #7aa2ff; background: #1c2b52; }
+      button.secondary { color: #cbd7ff; background: transparent; }
+      .blocks { display: grid; gap: 0.8rem; overflow: auto; max-height: calc(100vh - 8rem); padding-right: 0.25rem; }
+      .block { border: 1px solid #26324f; border-radius: 0.8rem; background: #0d1424; overflow: hidden; }
+      .block header { display: flex; justify-content: space-between; gap: 0.75rem; padding: 0.7rem 0.8rem; background: #111a2f; color: #d9e2ff; }
+      .block-meta { display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center; font-size: 0.78rem; }
+      .pill { border: 1px solid #3d4d79; border-radius: 999px; padding: 0.16rem 0.45rem; color: #cbd7ff; }
+      .pill.folded { border-color: #8a6b2d; color: #ffd891; }
+      pre { margin: 0; padding: 0.8rem; overflow: auto; white-space: pre-wrap; word-break: break-word; color: #e9eefc; line-height: 1.45; font: 0.83rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .empty { padding: 3rem; text-align: center; color: #8798c5; border: 1px dashed #33436c; border-radius: 1rem; }
+      @media (max-width: 760px) { main { grid-template-columns: 1fr; } aside { position: static; height: auto; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <aside>
+        <h1>Accordion</h1>
+        <div id="status" class="status">Connecting to OMP session…</div>
+        <div class="metric"><span>Session</span><strong id="session-id">—</strong></div>
+        <div class="metric"><span>Model</span><strong id="model">—</strong></div>
+        <div class="metric"><span>Context window</span><strong id="context-window">—</strong></div>
+        <div class="metric"><span>Blocks tracked</span><strong id="block-count">0</strong></div>
+        <p class="status">Use Fold on a block to queue a `{#&lt;code&gt; FOLDED}` replacement. Use <code>accordion_unfold</code> or <code>accordion_recall</code> with the shown code when the agent needs the full text back.</p>
+      </aside>
+      <section>
+        <div class="toolbar">
+          <h2>Live context</h2>
+          <button id="reconnect" class="secondary" type="button">Reconnect</button>
+        </div>
+        <div id="blocks" class="blocks"><div class="empty">No context blocks yet.</div></div>
+      </section>
+    </main>
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

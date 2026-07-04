@@ -7,6 +7,19 @@ points through `package.json#omp.extensions`.
 
 ## Packages
 
+### `omp-accordion`
+
+Path: `extensions/accordion`
+
+Adds a browser-only Accordion live context map for OMP sessions:
+
+- `/accordion` starts the session-scoped HTTP/WebSocket server and opens or reports a tokenized cmux browser URL.
+- `accordion_unfold` restores folded `{#<code> FOLDED}` blocks into standing context on the next turn.
+- `accordion_recall` returns folded block content in the current tool result without changing standing context.
+
+The OMP port intentionally drops the legacy desktop/Tauri launcher and `~/.accordion` registry/focus files. The browser
+client connects directly to the extension-owned loopback server for the current OMP session.
+
 ### `omp-generative-ui`
 
 Path: `extensions/generative-ui`
@@ -110,6 +123,7 @@ bun run check
 Run one extension check:
 
 ```sh
+bun --cwd extensions/accordion check
 bun --cwd extensions/generative-ui check
 bun --cwd extensions/chatgpt-links check
 bun --cwd extensions/dynamic-workflows check
@@ -120,7 +134,10 @@ bun --cwd extensions/subagent-preview check
 Run one extension's tests:
 
 ```sh
+bun --cwd extensions/accordion test
 bun --cwd extensions/dynamic-workflows test
+bun --cwd extensions/generative-ui test
+bun --cwd extensions/chatgpt-links test
 bun --cwd extensions/subagent-preview test
 bun --cwd extensions/chatgpt-pro-consult test
 ```
@@ -138,7 +155,14 @@ Rebuild the browser runtime bundle after changing files under `extensions/genera
 bun --cwd extensions/generative-ui run build:runtime
 ```
 
+Rebuild Accordion's packaged browser client after changing files under `extensions/accordion/src/client`:
+
+```sh
+bun --cwd extensions/accordion build:client
+```
+
 ## Loading an extension locally
+
 
 The package manifest exposes the extension entry point:
 

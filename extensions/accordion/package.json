@@ -1,0 +1,29 @@
+{
+  "name": "omp-accordion",
+  "version": "0.1.0",
+  "description": "Accordion for OMP — browser-only live context map and reversible folding",
+  "type": "module",
+  "keywords": ["omp-package", "oh-my-pi", "accordion", "context"],
+  "files": ["src", "dist", "skills", "README.md"],
+  "omp": {
+    "extensions": ["./src/index.ts"]
+  },
+  "scripts": {
+    "build:client": "bun src/build-client.mjs",
+    "test": "bun test tests/*.test.ts",
+    "check": "bun test tests/*.test.ts && bun build src/index.ts --target=bun --external @oh-my-pi/pi-coding-agent --external @oh-my-pi/pi-agent-core --external @oh-my-pi/pi-ai --outdir /tmp/omp-accordion-check"
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-ai": "^15",
+    "@oh-my-pi/pi-agent-core": "^15",
+    "@oh-my-pi/pi-coding-agent": "^15"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-ai": "^15",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "bun": ">=1.3.14"
+  },
+  "license": "MIT"
+}
