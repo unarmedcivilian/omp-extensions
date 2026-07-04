@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { runCompletionRequest, type CompletionRelayDeps } from "./completion.js";
-import { applyPlan, linearize, type PiMessage, type PlanOp } from "./live/mapping.js";
-import { PROTOCOL_VERSION, type CompleteRequestMessage, type GroupOp, type RecallContent, type ServerMessage, type UnfoldRequestMessage, type UnfoldRestored, type WireBlock } from "./live/protocol.js";
+import { applyPlan, linearize, type PiMessage } from "./app/src/lib/live/mapping.js";
+import { PROTOCOL_VERSION, type CompleteRequestMessage, type FoldOp, type GroupOp, type RecallContent, type ServerMessage, type UnfoldRequestMessage, type UnfoldRestored, type WireBlock } from "./app/src/lib/live/protocol.js";
 import { createStaticHandler } from "./static.js";
 
 export interface AccordionSessionOptions {
@@ -22,7 +22,7 @@ export interface ContextResult {
 }
 
 interface Plan {
-  ops: PlanOp[];
+  ops: FoldOp[];
   groups: GroupOp[];
 }
 

@@ -5,6 +5,8 @@ dist/
 !extensions/accordion/dist/
 !extensions/accordion/dist/client/
 !extensions/accordion/dist/client/**
+extensions/accordion/src/app/build/
+extensions/accordion/src/app/.svelte-kit/
 artifacts/
 .worktrees/
 reference/

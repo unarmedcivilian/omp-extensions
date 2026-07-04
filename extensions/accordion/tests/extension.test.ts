@@ -52,6 +52,8 @@ describe("accordion extension factory", () => {
     expect(fake.flags.has("accordion-app")).toBe(false);
     expect(fake.tools.has("accordion_unfold")).toBe(true);
     expect(fake.tools.has("accordion_recall")).toBe(true);
+    expect([...fake.tools.keys()]).toEqual(["accordion_unfold", "accordion_recall"]);
+    expect(new Set(fake.tools.keys()).size).toBe(fake.tools.size);
     expect(fake.tools.get("accordion_unfold")?.description).toContain("{#<code> FOLDED}");
     expect(fake.tools.get("accordion_recall")?.description).toContain("{#<code> FOLDED}");
 
@@ -161,12 +163,13 @@ describe("accordion tools", () => {
     expect(textFromResult(recallResult)).toContain("abc123");
   });
 
-  test("attached accordion_unfold sends a browser request and reports restored and missing codes without echoing full content", async () => {
+  test("attached accordion_unfold preserves restored content for persistent context without dumping it into prose", async () => {
     const requested: string[][] = [];
+    const restorePayload = { restored: [{ code: "abc123", title: "restored block", text: "SECRET FULL TEXT" }], missing: ["missing"] };
     const session = makeSession({
       async requestUnfold(codes: string[]) {
         requested.push(codes);
-        return { restored: [{ code: "abc123", title: "restored block", text: "SECRET FULL TEXT" }], missing: ["missing"] };
+        return restorePayload;
       },
     });
     const fake = makeFakePi();
@@ -186,7 +189,33 @@ describe("accordion tools", () => {
     expect(textFromResult(result)).toContain("restored block");
     expect(textFromResult(result)).toContain("missing");
     expect(textFromResult(result)).not.toContain("SECRET FULL TEXT");
-    expect(detailsFromResult(result)).toEqual({ restored: [{ code: "abc123", title: "restored block", text: "SECRET FULL TEXT" }], missing: ["missing"] });
+    expect(detailsFromResult(result)).toEqual(restorePayload);
+  });
+
+  test("attached accordion_unfold accepts metadata-only persistent restore acknowledgements", async () => {
+    const metadataOnlyPayload = { restored: [{ code: "abc123", title: "metadata only block" }], missing: [] };
+    const session = makeSession({
+      async requestUnfold() {
+        return metadataOnlyPayload;
+      },
+    });
+    const fake = makeFakePi();
+
+    createAccordionExtension({ clientRoot: "tests/fixtures/client", createSession: async () => session })(fake.pi);
+    await fake.commands.get("accordion")?.handler("", makeCtx());
+
+    const result = await fake.tools.get("accordion_unfold")?.execute?.(
+      "tool-metadata-only",
+      { codes: ["abc123"] },
+      new AbortController().signal,
+      undefined,
+      makeCtx(),
+    );
+
+    expect(textFromResult(result)).toContain("metadata only block");
+    expect(textFromResult(result)).not.toContain("SECRET FULL TEXT");
+    expect(detailsFromResult(result)).toEqual(metadataOnlyPayload);
+    expect((result as { isError?: boolean } | undefined)?.isError).toBeUndefined();
   });
 
   test("attached accordion_recall returns recalled content in the current tool result", async () => {

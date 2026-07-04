@@ -1,5 +1,5 @@
 import { complete as completeWithPiAi } from "@oh-my-pi/pi-ai";
-import type { CompleteRequestMessage, CompleteResultMessage } from "./live/protocol.js";
+import type { CompleteRequestMessage, CompleteResultMessage } from "./app/src/lib/live/protocol.js";
 
 export interface CompletionInput {
   model: unknown;

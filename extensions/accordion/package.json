@@ -1,17 +1,20 @@
 {
   "name": "omp-accordion",
   "version": "0.1.0",
-  "description": "Accordion for OMP — browser-only live context map and reversible folding",
+  "description": "Accordion for OMP — source-preserved live context map, conductors, and reversible folding",
   "type": "module",
-  "keywords": ["omp-package", "oh-my-pi", "accordion", "context"],
-  "files": ["src", "dist", "skills", "README.md"],
+  "keywords": ["omp-package", "oh-my-pi", "accordion", "context", "conductor"],
+  "files": ["src/*.ts", "src/*.mjs", "src/app/src", "src/app/static", "src/app/package.json", "src/app/svelte.config.js", "src/app/tsconfig.json", "src/app/vite.config.js", "src/app/vitest.config.ts", "src/conductors", "dist", "skills", "README.md"],
   "omp": {
     "extensions": ["./src/index.ts"]
   },
   "scripts": {
-    "build:client": "bun src/build-client.mjs",
+    "build:app": "bun --cwd src/app build",
+    "build:client": "bun run build:app && bun src/build-client.mjs",
     "test": "bun test tests/*.test.ts",
-    "check": "bun test tests/*.test.ts && bun build src/index.ts --target=bun --external @oh-my-pi/pi-coding-agent --external @oh-my-pi/pi-agent-core --external @oh-my-pi/pi-ai --outdir /tmp/omp-accordion-check"
+    "test:app": "bun --cwd src/app test",
+    "check:app": "bun --cwd src/app check",
+    "check": "bun run check:app && bun run build:client && bun test tests/*.test.ts && bun build src/index.ts --target=bun --external @oh-my-pi/pi-coding-agent --external @oh-my-pi/pi-agent-core --external @oh-my-pi/pi-ai --outdir /tmp/omp-accordion-check"
   },
   "peerDependencies": {
     "@oh-my-pi/pi-ai": "^15",
@@ -19,7 +22,22 @@
     "@oh-my-pi/pi-coding-agent": "^15"
   },
   "devDependencies": {
+    "@fontsource-variable/ibm-plex-sans": "^5.2.8",
+    "@fontsource/ibm-plex-mono": "^5.2.7",
     "@oh-my-pi/pi-ai": "^15",
+    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/kit": "^2.9.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-fs": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@types/node": "^26.0.0",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.9",
     "ws": "^8.18.0"
   },
   "engines": {

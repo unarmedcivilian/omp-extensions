@@ -161,6 +161,22 @@ describe("AccordionSession browser loop", () => {
     }
   });
 
+  test("session_before_compact cancellation is scoped to an attached browser", async () => {
+    const session = await AccordionSession.create({ clientRoot: "tests/fixtures/client" });
+    try {
+      expect(session.onBeforeCompact()).toBeUndefined();
+
+      const ws = await connectWebSocket(session.url());
+      await nextJson(ws, "hello");
+      expect(session.onBeforeCompact()).toEqual({ cancel: true });
+
+      await session.close();
+      expect(session.onBeforeCompact()).toBeUndefined();
+    } finally {
+      await session.close();
+    }
+  });
+
   test("sends fresh context blocks and applies a non-empty returned plan", async () => {
     const session = await AccordionSession.create({ clientRoot: "tests/fixtures/client", requestTimeoutMs: 200 });
     try {

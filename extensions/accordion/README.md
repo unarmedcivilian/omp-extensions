@@ -1,25 +1,27 @@
 # omp-accordion
 
-Browser-only Accordion live context map for OMP.
+Source-preserved Accordion live context map and conductor UI for OMP.
 
-Accordion shows the current OMP session context in a browser surface, lets the browser client return fold/group plans during OMP `context` hooks, and exposes tools that let the agent recover folded content by code.
+Accordion serves the original Svelte Accordion app from this package, connects it to the current OMP session over the extension-owned loopback WebSocket, lets the app return fold/group plans during OMP `context` hooks, and exposes tools that let the agent recover folded content by code.
 
 ## What changed from the Pi extension
 
-This OMP package intentionally ports the core live-context behavior only:
+This OMP package keeps the original browser app, live protocol, mapping code, store, and in-process conductor source under `src/app` and `src/conductors`. The OMP-specific layer is the extension host boundary:
 
-- No Tauri/desktop launcher.
-- No `~/.accordion/sessions/*.json` registry files.
-- No `~/.accordion/focus.json` focus handoff.
-- No generic legacy `unfold` or `recall` tool names.
+- default OMP extension factory using `@oh-my-pi/pi-coding-agent`
+- OMP command/tool/hook registration
+- session-scoped loopback HTTP/WebSocket server
+- cmux browser opening with manual URL fallback
+- OMP model completion relay for conductor summaries
+- `session_shutdown` cleanup
 
-The OMP extension owns one session-scoped loopback HTTP/WebSocket server. `/accordion` opens the tokenized browser URL through cmux when the cmux Unix socket is available; otherwise it reports the URL for manual opening.
+The port intentionally does not launch the legacy Tauri desktop app and does not write `~/.accordion/sessions/*.json` or `~/.accordion/focus.json`. Browser-served mode connects directly to the loopback server that served the page.
 
 ## Commands and tools
 
 ### `/accordion`
 
-Starts or reuses the Accordion session for the current OMP process and opens/reports the browser URL.
+Starts or reuses the Accordion session for the current OMP process and opens/reports the tokenized browser URL.
 
 ### `accordion_unfold`
 
@@ -29,7 +31,7 @@ Input:
 { "codes": ["abc123"] }
 ```
 
-Use codes copied from `{#<code> FOLDED}` markers. The browser restores matching folded blocks into the next turn's standing context. Tool output lists restored and missing codes but does not echo full restored content.
+Use codes copied from `{#<code> FOLDED}` markers. The browser app resolves matching folded blocks in its live store and marks them unfolded for the next OMP context pass. Tool output lists restored and missing codes but does not echo full restored content.
 
 ### `accordion_recall`
 
@@ -50,14 +52,15 @@ The extension exposes two skills through `resources_discover`:
 
 ## Development
 
-Run the package tests and build check:
+Run the OMP extension tests, source app tests, and build/type check:
 
 ```sh
 bun --cwd extensions/accordion test
+bun --cwd extensions/accordion test:app
 bun --cwd extensions/accordion check
 ```
 
-Rebuild the packaged browser client after changing files under `src/client`:
+Rebuild the packaged browser client after changing files under `src/app` or `src/conductors`:
 
 ```sh
 bun --cwd extensions/accordion build:client

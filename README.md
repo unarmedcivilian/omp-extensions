@@ -11,14 +11,14 @@ points through `package.json#omp.extensions`.
 
 Path: `extensions/accordion`
 
-Adds a browser-only Accordion live context map for OMP sessions:
+Adds the source-preserved Accordion live context map and conductor UI for OMP sessions:
 
 - `/accordion` starts the session-scoped HTTP/WebSocket server and opens or reports a tokenized cmux browser URL.
-- `accordion_unfold` restores folded `{#<code> FOLDED}` blocks into standing context on the next turn.
+- The original Accordion Svelte app, live store, mapping code, and in-process conductors are packaged under `extensions/accordion/src/app` and `extensions/accordion/src/conductors`.
+- `accordion_unfold` asks the browser app to reopen folded `{#<code> FOLDED}` blocks for the next context pass.
 - `accordion_recall` returns folded block content in the current tool result without changing standing context.
 
-The OMP port intentionally drops the legacy desktop/Tauri launcher and `~/.accordion` registry/focus files. The browser
-client connects directly to the extension-owned loopback server for the current OMP session.
+The OMP port keeps browser-served Accordion behavior but drops the legacy desktop/Tauri launcher and `~/.accordion` registry/focus files.
 
 ### `omp-generative-ui`
 
@@ -135,6 +135,7 @@ Run one extension's tests:
 
 ```sh
 bun --cwd extensions/accordion test
+bun --cwd extensions/accordion test:app
 bun --cwd extensions/dynamic-workflows test
 bun --cwd extensions/generative-ui test
 bun --cwd extensions/chatgpt-links test
@@ -155,7 +156,7 @@ Rebuild the browser runtime bundle after changing files under `extensions/genera
 bun --cwd extensions/generative-ui run build:runtime
 ```
 
-Rebuild Accordion's packaged browser client after changing files under `extensions/accordion/src/client`:
+Rebuild Accordion's packaged browser client after changing files under `extensions/accordion/src/app` or `extensions/accordion/src/conductors`:
 
 ```sh
 bun --cwd extensions/accordion build:client

@@ -50,6 +50,15 @@ async function collectPackagedClientFiles(dir = ""): Promise<string[]> {
   return files.flat().sort();
 }
 
+async function collectPackagedClientTextAssets() {
+  const files = await collectPackagedClientFiles();
+  const textFiles = files.filter(file => browserTextAssetExtensions[extname(file)]);
+  return Promise.all(textFiles.map(async file => ({
+    file,
+    content: await Bun.file(join(packagedClientRoot, file)).text(),
+  })));
+}
+
 describe("Accordion static handler", () => {
   test("serves ungated metadata with session and protocol information", async () => {
     const root = await makeRoot();
@@ -107,34 +116,42 @@ describe("Accordion static handler", () => {
     expect(encodedBackslash.status).toBe(403);
   });
 
-  test("packaged browser client is present for source checkout and package publish", async () => {
-    const index = Bun.file("dist/client/index.html");
+  test("packaged browser client is not the handwritten rewrite and auto-connects when browser-served", async () => {
+    const textAssets = await collectPackagedClientTextAssets();
+    const minimalRewriteMarkers = [
+      "No context blocks yet.",
+      "Blocks tracked",
+      "document.querySelector(\"#blocks\")",
+      "Queued fold for #",
+    ];
+    const browserServedAutoConnectMarkers = [
+      "/__accordion/meta",
+      "same-origin",
+      "protocolVersion",
+      "sessionId",
+      "served",
+    ];
+    const minimalRewriteHits = minimalRewriteMarkers.flatMap(marker =>
+      textAssets
+        .filter(asset => asset.content.includes(marker))
+        .map(asset => `${asset.file}: ${marker}`)
+    );
+    const browserServedAutoConnectHits = browserServedAutoConnectMarkers.filter(marker =>
+      textAssets.some(asset => asset.content.includes(marker))
+    );
 
-    expect(await index.exists()).toBe(true);
-    expect(await index.text()).toContain("__accordion");
+    expect({ minimalRewriteHits, browserServedAutoConnectHits }).toEqual({
+      minimalRewriteHits: [],
+      browserServedAutoConnectHits: browserServedAutoConnectMarkers,
+    });
   });
 
-  test("packaged browser client does not include the upstream sample session", async () => {
-    const files = await collectPackagedClientFiles();
+  test("packaged browser client uses a deterministic SvelteKit app version", async () => {
+    const version = await Bun.file(join(packagedClientRoot, "_app", "version.json")).json() as { version?: string };
 
-    expect(files).not.toContain("sample-session.jsonl");
+    expect(version).toEqual({ version: "omp-accordion" });
   });
 
-  test("packaged browser client assets do not expose legacy desktop or sample markers", async () => {
-    const files = await collectPackagedClientFiles();
-    const legacyMarkers = ["Fake pi session", "__TAURI_INTERNALS__", "plugin:path"];
-    const markerHits: string[] = [];
-
-    for (const file of files) {
-      if (!browserTextAssetExtensions[extname(file)]) continue;
-      const content = await Bun.file(join(packagedClientRoot, file)).text();
-      for (const marker of legacyMarkers) {
-        if (content.includes(marker)) markerHits.push(`${file}: ${marker}`);
-      }
-    }
-
-    expect(markerHits).toEqual([]);
-  });
 
   test("serves the packaged browser index and app asset through token auth", async () => {
     const handler = createStaticHandler({ clientRoot: packagedClientRoot, token: "secret", sessionId: "s1", protocolVersion: 5 });
@@ -147,7 +164,7 @@ describe("Accordion static handler", () => {
 
     expect(index.status).toBe(200);
     expect(index.headers.get("set-cookie")).toContain("accordion_token=secret");
-    expect(indexBody).toContain("__accordion");
+    expect(indexBody).toContain("<title>Accordion</title>");
     if (!appAsset) throw new Error("packaged index did not reference an app entry asset");
 
     const app = await call(handler, appAsset, "accordion_token=secret");

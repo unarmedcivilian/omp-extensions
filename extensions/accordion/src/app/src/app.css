@@ -1,0 +1,175 @@
+/* Accordion — design system.
+ * Dark, dense, developer-grade. The block KIND is the primary visual signal,
+ * so its colors are first-class tokens used by every component. */
+
+:root {
+	/* ===== Surfaces — neutral Ink/Charcoal elevation ladder (brand) ===== */
+	--bg: #0A0A0A;             /* Ink */
+	--panel: #1C1C1C;          /* Charcoal */
+	--panel-2: #232323;
+	--panel-3: #2C2C2C;
+	--panel-4: #383838;        /* active/highest control, stepping toward Slate #4A4A4A */
+	--line: #2E2E2E;
+	--line-soft: #202020;
+	--line-strong: #3C3C3C;    /* emphasized border */
+
+	--text: #F6F6F6;           /* Paper */
+	--muted: #9A9A9A;          /* Smoke — AA on panels */
+	--faint: #8C8C8C;          /* neutral tertiary step — ~AA (4.5:1) on panel-2 */
+
+	/* Brand named anchors — the two extremes of the monochrome ramp. Used directly by the
+	   Paper-solid primary button (bg Paper, text Ink), the brand's one bright affordance. */
+	--ink: #0A0A0A;            /* Ink — text-on-paper, button label */
+	--paper: #F6F6F6;          /* Paper — solid primary button surface */
+
+	/* UI accent — MONOCHROME (brand rule: blue is the user, never a button) */
+	--accent: #E8E8E8;         /* Cloud — primary actions / focus */
+	--accent-hover: #FFFFFF;
+	--accent-dim: #2C2C2C;     /* charcoal selection bg (also drives ::selection) */
+	--accent-soft: rgba(255, 255, 255, 0.08); /* tint fills */
+	--danger: #D26B6B;         /* muted red */
+	--ok: #5CB88A;             /* muted green */
+	--warn: #D6A24E;           /* muted amber — kept distinct from peach --k-tool_result */
+
+	/* block kinds — track the brand Spectrum identity (brand/accordion-brand-kit/brand.md).
+	   These VALUES intentionally override the former "DO NOT CHANGE" contract: the spectrum
+	   is now the canonical block-kind palette. Names are still load-bearing — do not rename. */
+	--k-user: #044EFF;
+	--k-text: #1AA6E8;         /* brand spectrum azure — the assistant-reply spine
+	                              (a real gradient stop, distinct from the 4 kinds; not gray) */
+	--k-thinking: #B480DF;
+	--k-tool_call: #21D4C1;
+	--k-tool_result: #E19C7D;
+	/* synthesized-summary tile (sliver fold mode) — dark neutral recessed tone; distinct
+	   from a folded group's brown so the summary never collides */
+	--k-summary: #2A2A2A;
+
+	/* multiblock folds (groups) — a solid recessed CHESTNUT brown. A folded group is
+	   its own object (several blocks stacked into one), so it gets its own non-spectrum
+	   hue — distinct from the four kind colors and clearly apart from peach tool_result.
+	   Canvas (tileDraw) and DOM group/summary surfaces both read --group. */
+	--group: #7C5230;               /* Chestnut — the group tile fill */
+	--group-edge: #0A0A0A;          /* crisp Ink rim around the brown tile */
+	--group-accent: #E8E8E8;        /* Cloud — group selection rings / band edge / controls */
+	--group-band: rgba(255, 255, 255, 0.05);
+	--group-ink: #0A0A0A;           /* Ink text on the light group button */
+	--group-accent-light: #FFFFFF;  /* hover tint for group button */
+
+	/* ===== Radii (brand) ===== */
+	--radius-xs: 4px;          /* inline code chips / tiny markers (floor) */
+	--radius: 12px;
+	--radius-sm: 8px;
+	--radius-lg: 16px;
+	--radius-xl: 20px;         /* NEW (brand) */
+	--radius-pill: 999px;
+
+	/* ===== Spacing 4/8 rhythm (brand) ===== */
+	--sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;
+	--sp-4: 16px; --sp-5: 22px; --sp-6: 32px;
+	--sp-7: 48px; --sp-8: 64px; /* NEW (brand) */
+
+	/* ===== Type scale (NEW) ===== */
+	/* --fs-2xs is a deliberate floor for decorative micro-labels only
+	   (badges, the WEIGHT legend, the vertical token rail) — not body/UI text. */
+	--fs-2xs: 10px;
+	--fs-xs: 12px; --fs-sm: 13px; --fs-base: 14px;
+	--fs-md: 15px; --fs-lg: 17px; --fs-xl: 20px; --fs-2xl: 26px;
+
+	/* ===== Elevation — consistent, dark-tuned (NEW) ===== */
+	--shadow-1: 0 1px 2px rgba(0,0,0,.4);
+	--shadow-2: 0 4px 12px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.4);
+	--shadow-3: 0 12px 32px rgba(0,0,0,.5), 0 2px 8px rgba(0,0,0,.4);
+
+	/* ===== Focus ring (accessibility) — neutral, monochrome ===== */
+	--focus: #E8E8E8;
+	--focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--focus);
+
+	/* ===== Spectrum gradient (brand) — folded context made visible ===== */
+	--gradient-spectrum: linear-gradient(90deg,#21D4C1 0%,#1AA6E8 30%,#044EFF 48%,#7D6EE6 64%,#B480DF 78%,#E19C7D 100%);
+
+	--mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+	--sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+	--dur-fast: 120ms;
+	--dur-mid: 200ms;
+	--dur-slow: 320ms;
+	--ease-out: cubic-bezier(.2,.7,.3,1);
+	--ease-spring: cubic-bezier(.34,1.4,.5,1);
+
+	color-scheme: dark;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	height: 100%;
+}
+
+body {
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--sans);
+	font-size: var(--fs-base);
+	line-height: 1.45;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	text-rendering: optimizeLegibility;
+	overflow: hidden; /* the app manages its own scroll regions */
+}
+
+::selection {
+	background: var(--accent-dim);
+}
+
+/* thin, unobtrusive scrollbars */
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+::-webkit-scrollbar-thumb {
+	background: var(--line);
+	border-radius: 6px;
+	border: 2px solid transparent;
+	background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: var(--panel-3);
+	background-clip: content-box;
+}
+
+button {
+	font-family: inherit;
+	color: inherit;
+	cursor: pointer;
+}
+
+.mono {
+	font-family: var(--mono);
+	font-variant-numeric: tabular-nums;
+}
+
+/* tabular-nums utility */
+.tnum {
+	font-variant-numeric: tabular-nums;
+}
+
+/* accessible focus ring — the box-shadow conforms to each element's OWN border-radius,
+   so we must NOT impose a radius here: doing so squared-off every pill-shaped control
+   (--radius-pill) while focused. Elements keep their natural shape; the ring follows. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+	outline: none;
+	box-shadow: var(--focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after {
+		animation-duration: .001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: .001ms !important;
+		scroll-behavior: auto !important;
+	}
+}

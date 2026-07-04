@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyPlan, linearize } from "../src/live/mapping.js";
+import { applyPlan, linearize } from "../src/app/src/lib/live/mapping.js";
 
 interface TextPart {
   type: "text";
@@ -7,14 +7,14 @@ interface TextPart {
 }
 
 interface ToolCallPart {
-  type: "tool_call";
+  type: "toolCall";
   id: string;
   name: string;
-  arguments: string;
+  arguments: Record<string, unknown>;
 }
 
 interface PiMessage {
-  role: "user" | "assistant" | "tool";
+  role: string;
   responseId?: string;
   toolCallId?: string;
   content: string | Array<TextPart | ToolCallPart>;
@@ -78,17 +78,17 @@ describe("Accordion live mapping", () => {
       {
         role: "assistant",
         responseId: "resp-tools",
-        content: [{ type: "tool_call", id: "call-1", name: "read", arguments: "{}" }],
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
       },
       {
-        role: "tool",
+        role: "toolResult",
         toolCallId: "call-1",
         content: [{ type: "text", text: "tool output" }],
       },
       assistantText("resp-after", "safe text"),
     ];
 
-    const output = applyPlan(messages, [{ ids: ["t:call-1:result"], digestText: "{#tool FOLDED} tool result only" }]);
+    const output = applyPlan(messages, [], [{ id: "group-1", memberIds: ["r:call-1"], summaryText: "{#tool FOLDED} tool result only" }]);
 
     expect(output).toBe(messages);
   });
@@ -98,16 +98,16 @@ describe("Accordion live mapping", () => {
       {
         role: "assistant",
         responseId: "resp-tools",
-        content: [{ type: "tool_call", id: "call-1", name: "read", arguments: "{}" }],
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
       },
       {
-        role: "tool",
+        role: "toolResult",
         toolCallId: "call-1",
         content: [{ type: "text", text: "tool output" }],
       },
     ];
 
-    const output = applyPlan(messages, [{ ids: ["a:resp-tools:p0", "t:call-1:result"], digestText: "{#tool FOLDED} read output" }]);
+    const output = applyPlan(messages, [], [{ id: "group-1", memberIds: ["a:resp-tools:p0", "r:call-1"], summaryText: "{#tool FOLDED} read output" }]);
 
     expect(output).not.toBe(messages);
     expect(linearize(output).map(block => block.text).join("\n")).toContain("{#tool FOLDED} read output");
