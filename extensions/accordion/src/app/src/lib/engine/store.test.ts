@@ -1,18 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { AccordionStore } from "./store.svelte";
-import type { Block, ParsedSession } from "./types";
+import type { Block, BlockKind, ParsedSession } from "./types";
 
 // A protected block is NEVER folded — by the auto-folder OR the user. This is the
 // safety pillar; these tests lock it so it can't silently regress.
 
-function blk(i: number, tokens: number): Block {
+function blk(i: number, tokens: number, kind: BlockKind = "text"): Block {
 	return {
 		id: `m${i}:p0`,
-		kind: "text",
+		kind,
 		turn: i + 1,
 		order: i,
-		text: `block ${i} ` + "x".repeat(160),
+		text: `${kind} block ${i}\n` + "x".repeat(160),
 		tokens,
+		toolName: kind === "tool_call" || kind === "tool_result" ? "grep" : undefined,
+		callId: kind === "tool_call" || kind === "tool_result" ? `call-${i}` : undefined,
 		override: null,
 		autoFolded: false,
 		by: null,
@@ -32,6 +34,45 @@ function makeStore(nOrTokens: number | number[], tokens = 1000): AccordionStore 
 	};
 	return new AccordionStore(parsed);
 }
+
+function makeStoreFromBlocks(blocks: Block[]): AccordionStore {
+	const parsed: ParsedSession = {
+		meta: { format: "pi", title: "t", cwd: "", model: "" },
+		blocks,
+		lineCount: 0,
+		skipped: 0,
+	};
+	return new AccordionStore(parsed);
+}
+
+type StoreWithFoldableUsage = AccordionStore & { foldableLiveTokens: number };
+
+describe("foldable usage accounting", () => {
+	it("reports effective live tokens for foldable blocks outside the protected tail only", () => {
+		const s = makeStoreFromBlocks([
+			blk(0, 4_000, "text"),
+			blk(1, 300, "thinking"),
+			blk(2, 500, "tool_result"),
+			blk(3, 700, "user"),
+			blk(4, 900, "tool_call"),
+			blk(5, 700, "text"),
+			blk(6, 800, "tool_result"),
+		]);
+		s.hostUsageTokens = 50_000;
+		s.setProtect(1_500);
+		s.fold(s.blocks[0].id);
+
+		expect(s.protectedFromIndex).toBe(5);
+		expect(s.isFolded(s.blocks[0])).toBe(true);
+		expect(s.effTokens(s.blocks[0])).toBeLessThan(s.blocks[0].tokens);
+		expect(s.liveTokens).toBe(s.blocks.reduce((sum, b) => sum + s.effTokens(b), 0));
+		expect(s.pressureTokens).toBe(50_000);
+
+		const expectedFoldableLiveTokens = s.effTokens(s.blocks[0]) + s.effTokens(s.blocks[1]) + s.effTokens(s.blocks[2]);
+		expect((s as StoreWithFoldableUsage).foldableLiveTokens).toBe(expectedFoldableLiveTokens);
+	});
+});
+
 
 describe("protected working tail is never folded", () => {
 	it("auto-folder folds old blocks but never a protected one", () => {

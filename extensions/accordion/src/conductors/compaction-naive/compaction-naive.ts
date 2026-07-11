@@ -26,12 +26,13 @@
  * snaps the run outward to whole messages and pair-balances `tool_call`/`tool_result`,
  * so no tool result is ever orphaned.
  *
- * TRIGGER — sliding-window-style hysteresis. `view.liveTokens` is the RAW, fully-unfolded
- * size (the host clears conductor folds before every pass), so it only grows; a naive
- * `liveTokens >= 90%` test would re-trigger on every pass once first crossed. Instead the
+ * TRIGGER — sliding-window-style hysteresis. `view.liveTokens` is the pressure
+ * baseline (actual host usage when available, otherwise Accordion's block estimate),
+ * so it includes non-foldable overhead as well as the cleared block view. A naive
+ * `liveTokens >= 90%` test would re-trigger every pass once first crossed. Instead the
  * conductor tracks the token SAVING its summary group provides and triggers on the VISIBLE
- * window: `visible = liveTokens − (Σ survivor tokens − summary token cost)`. When
- * `visible >= 90%` of budget AND there are newly-aged blocks to fold in, it launches a
+ * window: `visible = liveTokens − (Σ survivor tokens − summary token cost)`.
+ * When `visible >= 90%` of budget AND there are newly-aged blocks to fold in, it launches a
  * completion; otherwise it HOLDS, re-emitting the existing summary group. Compacting the
  * newly-aged blocks drops `visible` well below 90%, and the conductor waits for the window
  * to refill before acting again — the same high-water band sliding-window uses.
@@ -277,14 +278,13 @@ export class NaiveCompactionConductor implements Conductor {
 
 		// The blocks already represented by the summary that are still in the aged region.
 		// These are what the summary group covers, and their tokens are the saving that
-		// shrinks the VISIBLE window below the raw `liveTokens`.
+		// shrinks the visible pressure below `view.liveTokens`.
 		const survivors = aged.filter((b) => this.compactedIds.has(b.id));
 
-		// VISIBLE window = raw baseline minus the token saving the summary group provides.
-		// `view.liveTokens` is the RAW size (host clears conductor folds each pass), so
-		// without subtracting the saving the 90% trigger would fire on every pass once first
-		// crossed. This is the sliding-window hysteresis computation, with the summary's own
-		// token cost counted back in (the group replaces the survivors with the summary text).
+		// VISIBLE window = pressure baseline minus the token saving the summary group provides.
+		// `view.liveTokens` may include host/system/tool overhead that cannot be folded; keeping
+		// that overhead in the baseline is intentional, while subtracting only block savings keeps
+		// the hysteresis projection honest.
 		const savedTokens = this.summary !== null
 			? Math.max(0, sumTokens(survivors) - this.summaryTokenCost())
 			: 0;

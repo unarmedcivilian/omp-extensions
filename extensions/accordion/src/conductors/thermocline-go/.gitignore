@@ -1,0 +1,8 @@
+# One-time export artifacts (attn_probe.onnx is ~2 GB — distribute out-of-band).
+export/dist/
+export/.venv/
+__pycache__/
+
+# Built binaries.
+/attnprobe
+*.onnx

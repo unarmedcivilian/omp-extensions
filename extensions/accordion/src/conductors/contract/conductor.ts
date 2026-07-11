@@ -75,11 +75,14 @@ export interface ViewBlock {
  * A read-only view of the context the conductor reasons over — the single public surface,
  * pure data. The host owns it; a conductor MUST treat everything here as immutable.
  *
- * `liveTokens` is the baseline the conductor folds down FROM: the host has already cleared
- * the previous conductor pass, so it reflects the human's overrides and any folded groups
- * but NO conductor folds. `protectedFromIndex`/`protectTokens` surface the host's protected
- * working tail as POLICY (the built-in treats it as a hard "don't fold past here" line; a
- * conductor may ignore it, but folding into the tail may be reverted by host healing).
+ * `liveTokens` is the pressure baseline the conductor folds down FROM: when the live OMP
+ * host reports actual context usage it includes non-foldable system/developer/tool/runtime
+ * overhead, otherwise it falls back to Accordion's block estimate. The host has already
+ * cleared the previous conductor pass from the block view, so block savings still project
+ * from `ViewBlock.tokens - ViewBlock.foldedTokens`. `protectedFromIndex`/`protectTokens`
+ * surface the host's protected working tail as POLICY (the built-in treats it as a hard
+ * "don't fold past here" line; a conductor may ignore it, but folding into the tail may be
+ * reverted by host healing).
  */
 export interface ConductorView {
 	/** Every block, in conversation order. The conductor's whole field of view. */
@@ -88,7 +91,7 @@ export interface ConductorView {
 	budget: number;
 	/** The model's total context window as reported by the host, or null if unknown. */
 	contextWindow: number | null;
-	/** Live token cost at the moment the view is built — the baseline to fold down from. */
+	/** Total pressure token cost at the moment the view is built — host usage when known, else Accordion's block estimate. */
 	liveTokens: number;
 	/** Index of the first block in the host's protected working tail. `blocks.length` ⇒ no tail. */
 	protectedFromIndex: number;

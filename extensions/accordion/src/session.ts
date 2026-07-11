@@ -268,6 +268,7 @@ export class AccordionSession {
       type: "hello",
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.#sessionId,
+      tokens: this.#tokens,
       meta: this.#meta(),
     });
 
@@ -275,7 +276,7 @@ export class AccordionSession {
     if (live.length) this.#lastMessages = live;
     const backlog = linearize(this.#lastMessages);
     if (backlog.length) {
-      this.#send(ws, { type: "sync", reqId: ++this.#reqSeq, full: true, blocks: backlog, contextWindow: this.#contextWindow });
+      this.#send(ws, { type: "sync", reqId: ++this.#reqSeq, full: true, blocks: backlog, contextWindow: this.#contextWindow, tokens: this.#tokens });
       this.#sentCount = backlog.length;
     }
   }
@@ -284,12 +285,13 @@ export class AccordionSession {
     if (this.#client === ws) this.#client = null;
   }
 
-  #meta(): { title: string; cwd: string; model: string; contextWindow: number | null; format: "pi" } {
+  #meta(): { title: string; cwd: string; model: string; contextWindow: number | null; tokens: number | null; format: "pi" } {
     return {
       title: "OMP session",
       cwd: cwdFromCtx(this.#latestCtx),
       model: modelName(this.#latestModel),
       contextWindow: this.#contextWindow,
+      tokens: this.#tokens,
       format: "pi",
     };
   }
@@ -403,7 +405,7 @@ export class AccordionSession {
       clearTimeout(timer);
       gate.resolve(plan);
     });
-    this.#send(ws, { type: "sync", reqId, full, blocks, contextWindow: this.#contextWindow });
+    this.#send(ws, { type: "sync", reqId, full, blocks, contextWindow: this.#contextWindow, tokens: this.#tokens });
     return gate.promise;
   }
 
@@ -458,9 +460,10 @@ export class AccordionSession {
 
   onBeforeAgentStart(ctx: unknown): void {
     const previousWindow = this.#contextWindow;
+    const previousTokens = this.#tokens;
     this.#refreshFromCtx(ctx);
-    if (this.attached && previousWindow !== this.#contextWindow) {
-      this.#sendToClient({ type: "sync", reqId: ++this.#reqSeq, full: false, blocks: [], contextWindow: this.#contextWindow });
+    if (this.attached && (previousWindow !== this.#contextWindow || previousTokens !== this.#tokens)) {
+      this.#sendToClient({ type: "sync", reqId: ++this.#reqSeq, full: false, blocks: [], contextWindow: this.#contextWindow, tokens: this.#tokens });
     }
   }
 
@@ -510,7 +513,7 @@ export class AccordionSession {
     const all = linearize([...this.#lastMessages, ...this.#pendingSince]);
     if (all.length <= this.#sentCount) return;
     const full = this.#sentCount === 0;
-    this.#sendToClient({ type: "sync", reqId: ++this.#reqSeq, full, blocks: all.slice(this.#sentCount), contextWindow: this.#contextWindow });
+    this.#sendToClient({ type: "sync", reqId: ++this.#reqSeq, full, blocks: all.slice(this.#sentCount), contextWindow: this.#contextWindow, tokens: this.#tokens });
     this.#sentCount = all.length;
   }
 
@@ -524,7 +527,7 @@ export class AccordionSession {
     const all = linearize(this.#lastMessages);
     if (all.length <= this.#sentCount) return;
     const full = this.#sentCount === 0;
-    this.#sendToClient({ type: "sync", reqId: ++this.#reqSeq, full, blocks: all.slice(this.#sentCount), contextWindow: this.#contextWindow });
+    this.#sendToClient({ type: "sync", reqId: ++this.#reqSeq, full, blocks: all.slice(this.#sentCount), contextWindow: this.#contextWindow, tokens: this.#tokens });
     this.#sentCount = all.length;
   }
 

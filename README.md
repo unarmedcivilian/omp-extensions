@@ -17,6 +17,7 @@ Adds the source-preserved Accordion live context map and conductor UI for OMP se
 - The original Accordion Svelte app, live store, mapping code, and in-process conductors are packaged under `extensions/accordion/src/app` and `extensions/accordion/src/conductors`.
 - `accordion_unfold` asks the browser app to reopen folded `{#<code> FOLDED}` blocks for the next context pass.
 - `accordion_recall` returns folded block content in the current tool result without changing standing context.
+- Conductor pressure uses OMP's host-reported total context usage when available, while the UI keeps total Accordion block usage and non-tail foldable block usage visible separately.
 
 The OMP port keeps browser-served Accordion behavior but drops the legacy desktop/Tauri launcher and `~/.accordion` registry/focus files.
 

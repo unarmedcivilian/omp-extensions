@@ -10,7 +10,7 @@
 	const statusText = $derived(store.conductorStatus.text || conductorStatus.text);
 	const statusDetails = $derived(store.conductorStatus.text ? store.conductorStatus.details : conductorStatus.details);
 	const diagnostics = $derived(normalizeDiagnostics(statusDetails));
-	const health = $derived(healthFromStore(diagnostics.health, store.liveTokens, store.budget, store.contextWindow));
+	const health = $derived(healthFromStore(diagnostics.health, store.pressureTokens, store.budget, store.contextWindow));
 	const target = $derived(health.foldTargetCalibrated ?? health.foldTargetThisTurn);
 	const band = $derived(health.foldTargetBand);
 	const pressure = $derived(health.pressure ?? "normal");

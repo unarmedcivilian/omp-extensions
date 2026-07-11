@@ -21,7 +21,7 @@
 	const statusDetails = $derived(store?.conductorStatus.text ? store.conductorStatus.details : conductorStatus.details);
 	const diagnostics = $derived(normalizeDiagnostics(statusDetails));
 	const health = $derived(
-		store ? healthFromStore(diagnostics.health, store.liveTokens, store.budget, store.contextWindow) : undefined,
+		store ? healthFromStore(diagnostics.health, store.pressureTokens, store.budget, store.contextWindow) : undefined,
 	);
 	const currentTurn = $derived(store?.blocks.reduce((mx, b) => Math.max(mx, b.turn), 0));
 	const needed = $derived(computeNeededStats(store?.decisionJournal ?? [], currentTurn));

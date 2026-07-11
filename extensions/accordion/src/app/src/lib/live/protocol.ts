@@ -118,14 +118,17 @@ export interface HelloMessage {
 	protocolVersion: number;
 	/** Present on current extensions; older or malformed hello frames are treated as no active session id. */
 	sessionId?: string;
-	meta: { title: string; cwd: string; model: string; contextWindow: number | null; format: "pi" };
+	/** Host's actual current context usage, mirrored at top level for parity with sync frames. */
+	tokens?: number | null;
+	meta: { title: string; cwd: string; model: string; contextWindow: number | null; tokens?: number | null; format: "pi" };
 }
 
 /**
  * Sent on every `context` hook. `blocks` are the blocks ADDED since the previous
  * sync (the whole context when `full` is true — i.e. the first sync, or after a
- * structural reset). `reqId` correlates the GUI's `plan` reply. `contextWindow`
- * is the model's total token capacity (best-effort; absent from old extensions).
+ * structural reset). `contextWindow` is the model's total token capacity and `tokens`
+ * is the host's actual current context usage, including OMP/system/tool overhead
+ * outside Accordion's foldable block list (both best-effort; absent from old extensions).
  */
 export interface SyncMessage {
 	type: "sync";
@@ -133,6 +136,7 @@ export interface SyncMessage {
 	full: boolean;
 	blocks: WireBlock[];
 	contextWindow?: number | null;
+	tokens?: number | null;
 }
 
 /**

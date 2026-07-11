@@ -66,6 +66,7 @@ export interface ContextUpdateMessage {
 	rev: number;
 	budget: number;
 	contextWindow: number | null;
+	/** Actual host context usage when known, including non-foldable OMP overhead; else Accordion's block estimate. */
 	liveTokens: number;
 	/** First protected-tail index (host policy the conductor may honour or ignore). */
 	protectedFromIndex: number;

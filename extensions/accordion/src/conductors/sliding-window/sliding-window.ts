@@ -21,13 +21,14 @@
  *    the pair and the overshoot closes. The host owns deletion granularity too: `createGroup`
  *    snaps a run outward to whole messages, so a run ending mid-message deletes the rest of it.
  *
- *  - WHY internal state: the host clears conductor-owned folds before every pass, so
- *    `view.liveTokens` is ALWAYS the raw, fully-unfolded size — which only grows. A stateless
- *    conductor that compares `liveTokens` to 90% would therefore re-trigger on every pass once
- *    the raw size first crossed 90%, pinning the agent's view at 70% forever. To implement the
- *    band we must remember what we have already deleted: `dropped` is the committed drop-set
- *    (block ids). The visible window = `liveTokens − Σ(tokens of dropped blocks still eligible)`,
- *    and the trigger is evaluated against THAT, not the raw baseline. The set is MONOTONIC —
+ *  - WHY internal state: the host clears conductor-owned folds before every pass, and
+ *    `view.liveTokens` is the total pressure baseline — actual host usage when available,
+ *    otherwise Accordion's block estimate. A stateless conductor that compares `liveTokens`
+ *    to 90% would re-trigger on every pass once first crossed, pinning the agent's view at
+ *    70% forever. To implement the band we remember what we have already deleted: `dropped`
+ *    is the committed drop-set (block ids). The visible window =
+ *    `liveTokens − Σ(tokens of dropped blocks still eligible)`, and the trigger is evaluated
+ *    against THAT, not the baseline. The set is MONOTONIC —
  *    a deleted block is gone (per the "the block is gone" design); we only ever ADD to it,
  *    never release — and it is re-emitted as `group(digest:null)` commands every pass so the
  *    host (which rebuilds conductor groups each pass) keeps them applied.

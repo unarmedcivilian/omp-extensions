@@ -1,0 +1,23 @@
+# One-time export venv (CPU is fine — export + parity check only).
+# torch/transformers pinned to match the verified attention-folder probe venv
+# (../../attention-folder/probe/requirements.txt), minus the CUDA build.
+torch==2.5.1
+transformers==5.11.0
+tokenizers==0.22.2
+safetensors==0.8.0
+huggingface_hub==1.18.0
+
+numpy==2.2.6
+
+# ONNX serialization check + the parity run in export_probe.py.
+onnx>=1.17
+onnxruntime>=1.20
+
+# transformers runtime deps.
+Jinja2==3.1.6
+PyYAML==6.0.3
+filelock==3.29.0
+packaging==26.2
+requests
+tqdm==4.68.2
+regex==2026.5.9

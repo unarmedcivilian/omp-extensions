@@ -29,9 +29,9 @@
  * as naive compaction).
  *
  * VISIBLE-TOKENS ACCOUNTING (critical — extends naive compaction's). `view.liveTokens` is the
- * RAW, fully-unfolded size (the host clears conductor folds every pass), so a naive
- * `liveTokens >= 90%` test would re-fire every pass once first crossed. We must subtract BOTH
- * savings sources:
+ * pressure baseline (actual host usage when available, otherwise Accordion's block estimate).
+ * It may include non-foldable host overhead, so trigger math subtracts only the savings this
+ * conductor has actually created:
  *     visible       = liveTokens − summarySaving − bear2Saving
  *     summarySaving = Σ(original tokens of summarized older-half blocks) − summaryTokenCost
  *     bear2Saving   = Σ over CURRENT newer-half blocks with a SHRINKING cached compressed value of
@@ -250,8 +250,8 @@ export class Bear2HybridConductor implements Conductor {
 		const { olderIds, newerHalf } = this.splitAged(aged);
 
 		// ── VISIBLE accounting ──────────────────────────────────────────────────
-		// Both savings sources subtracted from the raw baseline, or the 90% trigger re-fires
-		// every pass (liveTokens only grows; the host clears conductor folds each pass).
+		// Both savings sources are subtracted from the pressure baseline; host overhead stays in
+		// the baseline because it counts against the real model window and cannot be folded here.
 		const summarySaving = this.summarySaving(aged);
 		const bear2Saving = this.bear2Saving(newerHalf);
 		const visible = view.liveTokens - summarySaving - bear2Saving;

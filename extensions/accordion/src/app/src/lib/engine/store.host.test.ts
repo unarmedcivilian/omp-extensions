@@ -13,8 +13,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { AccordionStore } from "./store.svelte";
-import type { Block, ParsedSession } from "./types";
+import { AccordionStore, type DecisionEvent } from "./store.svelte";
+import type { Actor, Block, Group, Override, ParsedSession } from "./types";
 import type {
 	Conductor,
 	ConductorHost,
@@ -54,6 +54,19 @@ function makeStore(blocks: Block[]): AccordionStore {
 		skipped: 0,
 	};
 	return new AccordionStore(parsed);
+}
+
+function publishHostContextUsage(store: AccordionStore, usedTokens: number, maxTokens: number): void {
+	const writable = store as AccordionStore & {
+		setHostContextUsage?: (usage: { usedTokens: number; maxTokens: number } | null) => void;
+		hostContextUsage?: { usedTokens: number; maxTokens: number } | null;
+	};
+	if (typeof writable.setHostContextUsage === "function") {
+		writable.setHostContextUsage({ usedTokens, maxTokens });
+		return;
+	}
+	writable.hostContextUsage = { usedTokens, maxTokens };
+	store.setContextWindow(maxTokens);
 }
 
 // ── Lifecycle-tracking conductor ──────────────────────────────────────────────
@@ -662,5 +675,100 @@ describe("AccordionStore conductor view — messageKey", () => {
 			["a:resp:p1", "a:resp"],
 			["r:call1", "r:call1"],
 		]);
+	});
+});
+
+describe("AccordionStore conductor view — host usage pressure", () => {
+	it("uses host context usage for conductor liveTokens while retaining block liveTokens for display", () => {
+		const s = makeStore([
+			blk(0, "text", 10_000),
+			blk(1, "text", 5_000),
+		]);
+		s.setProtect(0);
+		s.setBudget(100_000);
+		publishHostContextUsage(s, 90_000, 100_000);
+
+		const conductor = new TrackingConductor();
+		s.attach(conductor);
+
+		expect(s.liveTokens).toBe(15_000);
+		expect(conductor.lastView?.liveTokens).toBe(90_000);
+		expect(conductor.lastView?.contextWindow).toBe(100_000);
+	});
+});
+
+type PersistedBlockState = { id: string; override: Exclude<Override, null>; by: Actor; subst?: string };
+type PersistedStoreState = {
+	budget: number;
+	protectTokens: number;
+	blocks: PersistedBlockState[];
+	groups: Group[];
+};
+type StoreWithHydration = AccordionStore & {
+	hydratePersistedState?: (state: PersistedStoreState) => void;
+};
+
+describe("AccordionStore reload persistence hydration", () => {
+	it("silently restores persisted budget, protect tail, manual block state, and valid groups", () => {
+		const s = makeStore([
+			blk(0, "text", 9_000, { id: "a:held:p0", order: 0 }),
+			blk(1, "text", 9_000, { id: "a:pinned:p0", order: 1 }),
+			blk(2, "thinking", 9_000, { id: "a:group:p0", order: 2 }),
+			blk(3, "text", 9_000, { id: "a:group:p1", order: 3 }),
+			blk(4, "text", 9_000, { id: "a:other:p0", order: 4 }),
+		]);
+		s.setProtect(0);
+		s.setBudget(100_000);
+
+		const existingDecision: DecisionEvent = {
+			n: 77,
+			at: 123,
+			by: "you",
+			action: "pin",
+			ids: ["a:held:p0"],
+			detail: "pre-existing decision",
+			turn: 1,
+			kind: "text",
+		};
+		s.decisionJournal = [existingDecision];
+		const beforeJournal = [...s.decisionJournal];
+		const humanOverrides: { ids: string[]; action: string }[] = [];
+		s.onHumanOverride = (ids, action) => humanOverrides.push({ ids, action });
+
+		const hydrate = (s as StoreWithHydration).hydratePersistedState;
+		expect(hydrate).toBeTypeOf("function");
+		hydrate.call(s, {
+			budget: 12_000,
+			protectTokens: 0,
+			blocks: [
+				{ id: "a:held:p0", override: "folded", by: "you", subst: "persisted human summary" },
+				{ id: "a:pinned:p0", override: "pinned", by: "agent" },
+				{ id: "missing:block", override: "folded", by: "you" },
+			],
+			groups: [
+				{ id: "g:a:group:p0", memberIds: ["a:group:p0", "a:group:p1"], folded: true, by: "you" },
+				{ id: "g:stale", memberIds: ["a:group:p0", "missing:block"], folded: true, by: "you" },
+				{ id: "g:overlap", memberIds: ["a:group:p1", "a:other:p0"], folded: true, by: "you" },
+			],
+		});
+
+		expect(s.budget).toBe(12_000);
+		expect(s.protectTokens).toBe(0);
+		expect(s.get("a:held:p0")).toMatchObject({
+			override: "folded",
+			by: "you",
+			subst: "persisted human summary",
+		});
+		expect(s.get("a:pinned:p0")).toMatchObject({ override: "pinned", by: "agent" });
+		expect(s.isFolded(s.get("a:held:p0")!)).toBe(true);
+
+		expect(s.groups.map((g) => ({ id: g.id, memberIds: g.memberIds, folded: g.folded, by: g.by }))).toEqual([
+			{ id: "g:a:group:p0", memberIds: ["a:group:p0", "a:group:p1"], folded: true, by: "you" },
+		]);
+		expect(s.isFolded(s.get("a:group:p0")!)).toBe(true);
+		expect(s.isFolded(s.get("a:group:p1")!)).toBe(true);
+
+		expect(s.decisionJournal).toEqual(beforeJournal);
+		expect(humanOverrides).toEqual([]);
 	});
 });

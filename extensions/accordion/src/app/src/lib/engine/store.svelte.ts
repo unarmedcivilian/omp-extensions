@@ -11,7 +11,7 @@
  * tool_results before thinking before reply text before tool_calls before user
  * intent. Deterministic and explainable; the smarts come later.
  */
-import type { Block, Actor, SessionMeta, ParsedSession, Group } from "./types";
+import type { Block, Actor, SessionMeta, ParsedSession, Group, Override } from "./types";
 import { digest, digestTokens, foldTag, groupDigest, groupDigestTokens, substTokens, wireFoldable } from "./digest";
 import { estTokens, BLOCK_OVERHEAD } from "./tokens";
 import { isDurableId } from "../live/mapping";
@@ -103,6 +103,31 @@ export interface DecisionEvent {
 	reason?: string;
 }
 
+export interface PersistedBlockState {
+	id: string;
+	override: Exclude<Override, null>;
+	by: Actor;
+	subst?: string;
+}
+
+export interface PersistedStoreState {
+	budget: number;
+	protectTokens: number;
+	blocks: PersistedBlockState[];
+	groups: Group[];
+}
+
+const ACTORS: readonly Actor[] = ["you", "agent", "auto", "conductor"];
+const OVERRIDES: readonly Exclude<Override, null>[] = ["pinned", "folded", "unfolded"];
+
+function isActor(value: unknown): value is Actor {
+	return typeof value === "string" && ACTORS.includes(value as Actor);
+}
+
+function isPersistedOverride(value: unknown): value is Exclude<Override, null> {
+	return typeof value === "string" && OVERRIDES.includes(value as Exclude<Override, null>);
+}
+
 interface FoldSnapshot {
 	folded: boolean;
 	digest: string;
@@ -121,6 +146,12 @@ export class AccordionStore {
 	budget = $state(70_000);
 	/** Model's total context window, as reported by pi (null until known). */
 	contextWindow = $state<number | null>(null);
+	/**
+	 * Host-reported total context usage for the live OMP request. Unlike `liveTokens`,
+	 * this includes system/developer/tool/runtime overhead that Accordion cannot fold, so
+	 * conductor pressure uses it when available while block accounting stays visible.
+	 */
+	hostUsageTokens = $state<number | null>(null);
 	/**
 	 * The protected working tail: the most recent blocks up to this token target are
 	 * NEVER auto-folded, with a strict 25% whole-block overflow cap so a huge boundary
@@ -670,13 +701,23 @@ export class AccordionStore {
 		for (const b of this.blocks) n += b.tokens;
 		return n;
 	});
+	/** Current live token mass in provider-safe foldable block kinds outside the protected tail. */
+	foldableLiveTokens = $derived.by(() => {
+		let n = 0;
+		for (const b of this.blocks) {
+			if (wireFoldable(b) && !this.isProtected(b)) n += this.effTokens(b);
+		}
+		return n;
+	});
 	savedTokens = $derived.by(() => this.fullTokens - this.liveTokens);
+	/** Pressure basis for conductors and over-budget UI: host total if OMP reports it, else block estimate. */
+	pressureTokens = $derived.by(() => this.hostUsageTokens ?? this.liveTokens);
 	foldedCount = $derived.by(() => {
 		let n = 0;
 		for (const b of this.blocks) if (this.isFolded(b)) n++;
 		return n;
 	});
-	overBudget = $derived.by(() => this.liveTokens > this.budget);
+	overBudget = $derived.by(() => this.pressureTokens > this.budget);
 
 	// ---- groups (multiblock folds, ADR 0006) -------------------------------
 	/** blockId → the group it belongs to (if any). Reactive on `groups`. */
@@ -1070,7 +1111,7 @@ export class AccordionStore {
 			blocks,
 			budget: this.budget,
 			contextWindow: this.contextWindow,
-			liveTokens: this.liveTokens,
+			liveTokens: this.pressureTokens,
 			protectedFromIndex: protectedFrom,
 			// Under tail-size the conductor sees ITS OWN tail target — the same value that
 			// drove `protectedFromIndex`. Absent the lock, the human's `protectTokens` is passed
@@ -1185,6 +1226,107 @@ export class AccordionStore {
 		if (!g) reports.push(clamp("group", ids, "invalid-group", "not a valid contiguous, ungrouped run older than the protected tail"));
 	}
 
+	snapshotPersistedState(): PersistedStoreState {
+		return {
+			budget: this.budget,
+			protectTokens: this.protectTokens,
+			blocks: this.blocks
+				.filter((b): b is Block & { override: Exclude<Override, null>; by: Actor } => b.override !== null && isActor(b.by))
+				.map((b) => ({
+					id: b.id,
+					override: b.override,
+					by: b.by,
+					...(typeof b.subst === "string" ? { subst: b.subst } : {}),
+				})),
+			groups: this.groups
+				.filter((g) => g.by !== "auto" && g.by !== "conductor")
+				.map((g) => ({
+					id: g.id,
+					memberIds: [...g.memberIds],
+					folded: g.folded,
+					...(isActor(g.by) ? { by: g.by } : {}),
+					...(g.digest !== undefined ? { digest: g.digest } : {}),
+				})),
+		};
+	}
+
+	hydratePersistedState(state: PersistedStoreState): void {
+		if (
+			!state ||
+			typeof state !== "object" ||
+			!Number.isFinite(state.budget) ||
+			!Number.isFinite(state.protectTokens) ||
+			!Array.isArray(state.blocks) ||
+			!Array.isArray(state.groups)
+		) return;
+		const previousLog = [...this.log];
+		const previousDecisionJournal = [...this.decisionJournal];
+		const previousLogN = this.logN;
+		const previousDecisionN = this.decisionN;
+
+		if (Number.isFinite(state.budget)) this.budget = Math.max(1000, Math.round(state.budget));
+		if (Number.isFinite(state.protectTokens)) this.protectTokens = Math.max(0, Math.round(state.protectTokens));
+
+		for (const b of this.blocks) {
+			b.override = null;
+			b.by = null;
+			b.subst = undefined;
+			b.autoFolded = false;
+		}
+		this.groups = [];
+
+		for (const persisted of Array.isArray(state.blocks) ? state.blocks : []) {
+			const b = this.get(persisted.id);
+			if (!b || !isPersistedOverride(persisted.override) || !isActor(persisted.by)) continue;
+			b.override = persisted.override;
+			b.by = persisted.by;
+			b.subst = typeof persisted.subst === "string" ? persisted.subst : undefined;
+		}
+
+		const used = new Set<string>();
+		const groupIds = new Set<string>();
+		const groups: Group[] = [];
+		for (const group of Array.isArray(state.groups) ? state.groups : []) {
+			const normalized = this.normalizePersistedGroup(group, used, groupIds);
+			if (normalized) {
+				for (const id of normalized.memberIds) used.add(id);
+				groupIds.add(normalized.id);
+				groups.push(normalized);
+			}
+		}
+		this.groups = groups;
+
+		this.refold();
+		this.log = previousLog;
+		this.decisionJournal = previousDecisionJournal;
+		this.logN = previousLogN;
+		this.decisionN = previousDecisionN;
+	}
+
+	private normalizePersistedGroup(group: Group, used: Set<string>, groupIds: Set<string>): Group | null {
+		if (!group || typeof group.id !== "string" || groupIds.has(group.id)) return null;
+		if (!Array.isArray(group.memberIds) || group.memberIds.length === 0) return null;
+		const positions: number[] = [];
+		for (const id of group.memberIds) {
+			if (typeof id !== "string" || used.has(id)) return null;
+			const pos = this.index.get(id);
+			if (pos == null) return null;
+			if (pos >= this.protectedFromIndex) return null;
+			positions.push(pos);
+		}
+		for (let i = 1; i < positions.length; i++) {
+			if (positions[i] !== positions[i - 1] + 1) return null;
+		}
+		const out: Group = {
+			id: group.id,
+			memberIds: [...group.memberIds],
+			folded: group.folded === true,
+		};
+		if (isActor(group.by)) out.by = group.by;
+		if (typeof group.digest === "string" || group.digest === null) out.digest = group.digest;
+		return out;
+	}
+
 	setBudget(n: number): void {
 		this.budget = Math.max(1000, Math.round(n));
 		this.refold();
@@ -1192,6 +1334,21 @@ export class AccordionStore {
 
 	setContextWindow(n: number): void {
 		this.contextWindow = n;
+	}
+
+	setHostContextUsage(usage: { usedTokens?: number | null; maxTokens?: number | null } | null): void {
+		const nextTokens =
+			typeof usage?.usedTokens === "number" && Number.isFinite(usage.usedTokens) && usage.usedTokens >= 0
+				? Math.round(usage.usedTokens)
+				: null;
+		const nextWindow =
+			typeof usage?.maxTokens === "number" && Number.isFinite(usage.maxTokens) && usage.maxTokens > 0
+				? Math.round(usage.maxTokens)
+				: null;
+		const changed = nextTokens !== this.hostUsageTokens || (nextWindow !== null && nextWindow !== this.contextWindow);
+		this.hostUsageTokens = nextTokens;
+		if (nextWindow !== null) this.contextWindow = nextWindow;
+		if (changed) this.refold();
 	}
 
 	/**

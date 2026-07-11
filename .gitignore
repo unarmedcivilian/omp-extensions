@@ -10,3 +10,5 @@ extensions/accordion/src/app/.svelte-kit/
 artifacts/
 .worktrees/
 reference/
+.omp
+extensions/accordion/dist/

@@ -17,6 +17,10 @@ This OMP package keeps the original browser app, live protocol, mapping code, st
 
 The port intentionally does not launch the legacy Tauri desktop app and does not write `~/.accordion/sessions/*.json` or `~/.accordion/focus.json`. Browser-served mode connects directly to the loopback server that served the page.
 
+The live header and conductor pressure use OMP's host-reported context usage when available. That total includes system/developer/tool/runtime overhead outside Accordion's block list; the UI also shows total Accordion block usage and the provider-safe non-tail foldable block usage so fold savings remain visible.
+
+The browser UI snapshots same-session live state in `sessionStorage`: hard-refreshing or reopening the Accordion page for the same OMP session restores the armed folding switch, budget/protect settings, manual folds/pins, and valid groups before the next fold plan is sent. Snapshots are keyed by OMP session id and are not reused across sessions.
+
 ## Commands and tools
 
 ### `/accordion`

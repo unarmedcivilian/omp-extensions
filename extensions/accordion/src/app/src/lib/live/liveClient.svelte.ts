@@ -15,6 +15,7 @@ import { AccordionStore } from "../engine/store.svelte";
 import { wireToBlock } from "./mapping";
 import { computeFoldOps, computeGroupOps, resolveUnfold, resolveRecall } from "./plan";
 import { folding } from "./folding.svelte";
+import { restoreLiveUiState, snapshotLiveUiState } from "./liveSessionState";
 import { activeRemoteRunner } from "./conductorClient.svelte";
 import { DEFAULT_PORT, PROTOCOL_VERSION, isServerMessage, type ServerMessage, type PlanMessage, type FoldOp, type GroupOp, type UnfoldResultMessage, type RecallResultMessage, type CompleteRequestMessage } from "./protocol";
 import { ghostStart, ghostEnd, ghostClearAll } from "./ghostState.svelte";
@@ -25,6 +26,8 @@ let manualClose = false;
 // True once budget has been set from pi's contextWindow for the current connection.
 // Prevents subsequent syncs from overriding a user's manual budget adjustment.
 let budgetLive = false;
+let pendingRestoreSessionId: string | null = null;
+let pagehidePersistenceInstalled = false;
 
 /**
  * Safety backstop: if the extension (or the model it calls) never replies to a
@@ -55,6 +58,26 @@ export const live = $state<{ status: "idle" | "connecting" | "connected" | "erro
 	detail: "",
 	sessionId: null,
 });
+
+function currentStorage(): Storage | null {
+	try {
+		return typeof sessionStorage === "undefined" ? null : sessionStorage;
+	} catch {
+		return null;
+	}
+}
+
+function persistCurrentLiveUiState(): void {
+	const storage = currentStorage();
+	if (!storage) return;
+	snapshotLiveUiState(storage, live.sessionId, { foldingEnabled: folding.enabled, store: session.store });
+}
+
+function ensurePagehidePersistence(): void {
+	if (pagehidePersistenceInstalled || typeof window === "undefined") return;
+	pagehidePersistenceInstalled = true;
+	window.addEventListener("pagehide", persistCurrentLiveUiState);
+}
 
 /**
  * The fold plan the GUI returns for a sync — Milestone 2, "engine on."
@@ -178,9 +201,10 @@ async function sendCompletion(req: CompletionRequest): Promise<CompletionResult>
 		}
 	});
 }
-
 export function connectLive(port: number = DEFAULT_PORT): void {
 	if (typeof window === "undefined" || typeof WebSocket === "undefined") return;
+	ensurePagehidePersistence();
+	persistCurrentLiveUiState();
 	cancelPendingLoad(); // invalidate any pending file/CC load that would otherwise clobber the live store
 	disconnectLive(); // drop any prior socket
 	manualClose = false;
@@ -231,6 +255,7 @@ export function connectLive(port: number = DEFAULT_PORT): void {
 			// Safety (review Q5b): every new live attach starts DISARMED - folding is
 			// opt-in per session, never silently carried from a previously armed agent.
 			folding.enabled = false;
+			pendingRestoreSessionId = live.sessionId;
 			// Structural reset: clear all ghosts — no ghost survives a session reconnect.
 			ghostClearAll();
 			budgetLive = false;
@@ -251,6 +276,9 @@ export function connectLive(port: number = DEFAULT_PORT): void {
 				session.store.setBudget(msg.meta.contextWindow);
 				budgetLive = true;
 			}
+			if ("tokens" in msg || "tokens" in msg.meta) {
+				session.store.setHostContextUsage({ usedTokens: msg.tokens ?? msg.meta.tokens ?? null, maxTokens: msg.meta.contextWindow ?? null });
+			}
 		} else if (msg.type === "sync") {
 			if (!session.store) return;
 			if (msg.full) {
@@ -259,6 +287,7 @@ export function connectLive(port: number = DEFAULT_PORT): void {
 				const prevContextWindow = session.store.contextWindow;
 				const prevBudget = session.store.budget;
 				const prevProtect = session.store.protectTokens;
+				const prevHostUsage = session.store.hostUsageTokens;
 				session.store.dispose(); // abort the outgoing store's conductor (in-flight host.complete) before discarding it
 				session.store = new AccordionStore({
 					meta: session.store.meta,
@@ -266,8 +295,9 @@ export function connectLive(port: number = DEFAULT_PORT): void {
 					lineCount: 0,
 					skipped: 0,
 				});
-				// Carry forward contextWindow, user-adjusted budget, and protect-tail across resets.
+				// Carry forward contextWindow, host usage, user-adjusted budget, and protect-tail across resets.
 				if (prevContextWindow !== null) session.store.setContextWindow(prevContextWindow);
+				if (prevHostUsage !== null) session.store.setHostContextUsage({ usedTokens: prevHostUsage, maxTokens: prevContextWindow });
 				session.store.setBudget(prevBudget);
 				session.store.setProtect(prevProtect);
 				// Re-attach the completer: a structural reset builds a brand-new store object,
@@ -291,6 +321,14 @@ export function connectLive(port: number = DEFAULT_PORT): void {
 			// Committed blocks arrive HERE (the appendBlocks path), NEVER from ghost state.
 			// Invariant: a ghost is only removed, never converted to a block.
 			session.store.appendBlocks(msg.blocks.map(wireToBlock));
+			if ("tokens" in msg) {
+				session.store.setHostContextUsage({ usedTokens: msg.tokens ?? null, maxTokens: cw ?? null });
+			}
+			if (msg.full && pendingRestoreSessionId) {
+				const storage = currentStorage();
+				if (storage) restoreLiveUiState(storage, pendingRestoreSessionId, { folding, store: session.store });
+				pendingRestoreSessionId = null;
+			}
 			const plan = computePlan();
 			const reply: PlanMessage = { type: "plan", reqId: msg.reqId, ops: plan.ops, groups: plan.groups };
 			try {
@@ -395,6 +433,7 @@ export function connectLive(port: number = DEFAULT_PORT): void {
 	};
 
 	ws.onerror = () => {
+		persistCurrentLiveUiState();
 		live.status = "error";
 		live.detail = `could not reach pi on :${port} — is a pi session running with the accordion extension?`;
 		live.sessionId = null;
@@ -409,6 +448,7 @@ export function connectLive(port: number = DEFAULT_PORT): void {
 		// in a new one and reset manualClose - must NOT run this block, or it clobbers the
 		// new socket's connecting/connected state back to idle.
 		if (socket === ws) {
+			persistCurrentLiveUiState();
 			socket = null;
 			live.sessionId = null;
 			// Clear the completion backend so `host.can("complete")` returns false while
@@ -427,6 +467,7 @@ export function connectLive(port: number = DEFAULT_PORT): void {
 
 export function disconnectLive(): void {
 	manualClose = true;
+	persistCurrentLiveUiState();
 	budgetLive = false;
 	// Guaranteed teardown (invariant #2): explicit disconnect clears all ghosts
 	// immediately, before the socket close fires.

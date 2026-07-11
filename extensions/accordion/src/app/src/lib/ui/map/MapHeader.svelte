@@ -28,6 +28,7 @@
 	});
 
 	const denom = $derived(Math.max(store.fullTokens, store.budget, 1));
+	const usageGap = $derived(store.hostUsageTokens == null ? null : Math.max(0, store.hostUsageTokens - store.liveTokens));
 	const conductorStatusText = $derived(store.conductorStatus.text || conductorStatus.text);
 	const conductorStatusDetails = $derived(store.conductorStatus.text ? store.conductorStatus.details : conductorStatus.details);
 	// fmt/k formatters must round their input because AnimatedNumber passes a float mid-tween
@@ -154,20 +155,29 @@
 
 <div class="hdr">
 	<div class="top">
-		<!-- ── Left: the hero live number / budget. Single focal stat — no echoing
-		     CONTEXT eyebrow or live·folded readout (those just restated this). ── -->
+		<!-- ── Left: OMP context pressure when available; Accordion block usage stays visible below. ── -->
 		<div class="nums">
 			<div class="hero-line">
 				<span class="hero-stat mono tnum" class:over={store.overBudget}>
-					<AnimatedNumber value={store.liveTokens} format={fmt} />
+					<AnimatedNumber value={store.pressureTokens} format={fmt} />
 				</span>
 				<span class="budget-denom mono tnum">/ <AnimatedNumber value={store.budget} format={fmt} /></span>
 				{#if store.overBudget}
 					<span class="over-flag mono tnum">
-						over by <AnimatedNumber value={store.liveTokens - store.budget} format={fmtOverBy} />
+						over by <AnimatedNumber value={store.pressureTokens - store.budget} format={fmtOverBy} />
 					</span>
 				{/if}
 			</div>
+			{#if store.hostUsageTokens != null || store.blocks.length > 0}
+				<div class="usage-subline mono tnum" title="OMP context usage includes system/developer/tool/runtime overhead; foldable counts provider-safe non-tail blocks Accordion can shrink.">
+					<span>{store.hostUsageTokens != null ? "OMP context" : "Accordion blocks"}</span>
+					<span>· blocks <AnimatedNumber value={store.liveTokens} format={k} /></span>
+					<span>· foldable <AnimatedNumber value={store.foldableLiveTokens} format={k} /></span>
+					{#if usageGap !== null && usageGap > 0}
+						<span>· overhead <AnimatedNumber value={usageGap} format={k} /></span>
+					{/if}
+				</div>
+			{/if}
 		</div>
 
 		<!-- ── Right: controls cluster ── -->
@@ -405,6 +415,16 @@
 		font-size: var(--fs-sm);
 		color: var(--faint);
 		align-self: baseline;
+	}
+
+	.usage-subline {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.45rem;
+		align-items: center;
+		font-size: var(--fs-2xs);
+		color: var(--muted);
+		letter-spacing: 0.02em;
 	}
 
 	/* Over-budget flag — danger, no pill chrome */

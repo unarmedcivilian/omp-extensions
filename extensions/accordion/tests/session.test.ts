@@ -13,6 +13,9 @@ interface WireMessage {
   sessionId?: string;
   protocolVersion?: number;
   blocks?: unknown[];
+  contextWindow?: number | null;
+  tokens?: number | null;
+  meta?: { contextWindow?: number | null; tokens?: number | null };
 }
 
 interface TextPart {
@@ -47,6 +50,18 @@ function parseWireMessage(raw: unknown): WireMessage {
   if ("sessionId" in raw && typeof raw.sessionId === "string") message.sessionId = raw.sessionId;
   if ("protocolVersion" in raw && typeof raw.protocolVersion === "number") message.protocolVersion = raw.protocolVersion;
   if ("blocks" in raw && Array.isArray(raw.blocks)) message.blocks = raw.blocks;
+  if ("contextWindow" in raw && (typeof raw.contextWindow === "number" || raw.contextWindow === null)) message.contextWindow = raw.contextWindow;
+  if ("tokens" in raw && (typeof raw.tokens === "number" || raw.tokens === null)) message.tokens = raw.tokens;
+  if ("meta" in raw && raw.meta && typeof raw.meta === "object") {
+    const metaRecord = raw.meta as Record<PropertyKey, unknown>;
+    message.meta = {};
+    if ("contextWindow" in metaRecord && (typeof metaRecord.contextWindow === "number" || metaRecord.contextWindow === null)) {
+      message.meta.contextWindow = metaRecord.contextWindow;
+    }
+    if ("tokens" in metaRecord && (typeof metaRecord.tokens === "number" || metaRecord.tokens === null)) {
+      message.meta.tokens = metaRecord.tokens;
+    }
+  }
   return message;
 }
 
@@ -145,6 +160,21 @@ describe("AccordionSession browser loop", () => {
     }
   });
 
+  test("hello exposes host context usage tokens when known before browser attaches", async () => {
+    const ctx = makeCtx({ contextUsage: { usedTokens: 90_000, maxTokens: 100_000 } });
+    const session = await AccordionSession.create({ clientRoot: "tests/fixtures/client", ctx });
+    try {
+      const ws = await connectWebSocket(session.url());
+      const hello = await nextJson(ws, "hello");
+
+      expect(hello.tokens).toBe(90_000);
+      expect(hello.meta?.contextWindow).toBe(100_000);
+      ws.close();
+    } finally {
+      await session.close();
+    }
+  });
+
   test("accepts WebSocket authentication by accordion_token cookie", async () => {
     const session = await AccordionSession.create({ clientRoot: "tests/fixtures/client" });
     try {
@@ -196,6 +226,30 @@ describe("AccordionSession browser loop", () => {
       const result = await context;
 
       expect(result).toEqual({ messages: [{ role: "assistant", responseId: "resp-1", content: [{ type: "text", text: "{#abc123 FOLDED} summary" }] }] });
+      ws.close();
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("sync exposes host context usage tokens independently of visible block estimates", async () => {
+    const session = await AccordionSession.create({ clientRoot: "tests/fixtures/client", requestTimeoutMs: 200 });
+    try {
+      const ws = await connectWebSocket(session.url());
+      await nextJson(ws, "hello");
+      const sync = nextJson(ws, "sync");
+      const context = session.onContext(
+        { messages: [assistantText("resp-1", "visible content is tiny")] },
+        makeCtx({ contextUsage: { usedTokens: 90_000, maxTokens: 100_000 } }),
+      );
+      const syncMessage = await sync;
+
+      expect(syncMessage.blocks).toHaveLength(1);
+      expect(syncMessage.tokens).toBe(90_000);
+      expect(syncMessage.contextWindow).toBe(100_000);
+      ws.send(JSON.stringify({ type: "plan", reqId: syncMessage.reqId, ops: [], groups: [] }));
+
+      expect(await context).toBeUndefined();
       ws.close();
     } finally {
       await session.close();

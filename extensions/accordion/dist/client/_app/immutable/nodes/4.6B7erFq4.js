@@ -1,1 +1,0 @@
-import"../chunks/DVeK18Du.js";import{p as s,a as t,h as a,i as p}from"../chunks/l0n0tnlW.js";import{p as d}from"../chunks/CdYPNCRl.js";import{C as m}from"../chunks/Dkjc7Iaw.js";function f(e,r){s(r,!0);const o=p(()=>d.params.sessionId??null);m(e,{get requestedId(){return a(o)}}),t()}export{f as component};

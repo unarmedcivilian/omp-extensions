@@ -39,7 +39,7 @@ export class BuiltinConductor implements Conductor {
 	 * Fold lowest-value, oldest candidates until the live context fits the budget.
 	 *
 	 * Mirrors the original `refold()` decision body exactly:
-	 *  - start from the baseline `liveTokens` (the host has already cleared the prior pass);
+	 *  - start from the pressure baseline `liveTokens` (host usage when available, else block estimate);
 	 *  - if already under budget, fold nothing (`[]` → raw);
 	 *  - candidates are auto-controlled blocks older than the protected tail that aren't
 	 *    inside a folded group and would actually shrink if folded;
