@@ -184,9 +184,10 @@ export async function runChatGptProConsult(
         raceAbort(browser.requireSelectedChatGptSurface(operationSignal), operationSignal),
       );
     } catch (error) {
+      const abortReason = operationSignal.aborted ? abortErrorFromSignal(operationSignal) : undefined;
       await closeOwnedSurfacesQuietly(browser);
-      return operationSignal.aborted || isTimeoutOrAbortError(error)
-        ? errorResult(error, thread, false, browser.primarySurfaceRef())
+      return abortReason !== undefined || isTimeoutOrAbortError(error)
+        ? errorResult(abortReason ?? error, thread, false, browser.primarySurfaceRef())
         : blockedPreflightResult(error, thread);
     }
   }
@@ -435,10 +436,12 @@ export function createConsultDeadline(
 ): ConsultDeadline {
   const expiresAt = now().getTime() + timeoutMs;
   const remainingMs = () => Math.max(0, expiresAt - now().getTime());
+  let timeoutError: Error | undefined;
   const expire = (operation: string): Error => {
-    const error = createTimeoutError(operation);
-    onExpire?.(error);
-    return error;
+    if (timeoutError) return timeoutError;
+    timeoutError = createTimeoutError(operation);
+    onExpire?.(timeoutError);
+    return timeoutError;
   };
 
   return {
@@ -447,7 +450,12 @@ export function createConsultDeadline(
       if (remainingMs() <= 0) throw expire(operation);
     },
     async race<T>(operation: string, promise: Promise<T>): Promise<T> {
-      this.throwIfExpired(operation);
+      try {
+        this.throwIfExpired(operation);
+      } catch (error) {
+        void promise.catch(() => undefined);
+        throw error;
+      }
       const timeout = Promise.withResolvers<never>();
       const timer = setTimeout(() => timeout.reject(expire(operation)), remainingMs());
 

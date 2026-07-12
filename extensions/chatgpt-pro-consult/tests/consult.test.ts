@@ -288,28 +288,29 @@ describe("runChatGptProConsult", () => {
     expect(result.details.blocker).toMatchObject({ code: "current_chatgpt_surface_missing" });
   });
 
-  test("preserves a caller Error that aborts pending current-thread preflight", async () => {
+  test("preserves the caller reason when current preflight rejects as the caller aborts", async () => {
     const controller = new AbortController();
-    const started = Promise.withResolvers<void>();
+    const reason = new Error("cancelled");
+    const surfaceError = new Error("surface closed");
     const deps = depsReturning(
       { ok: true, status: "ok", output_text: "should not run", warnings: [] },
-      {
-        currentSurface: () => {
-          started.resolve();
-          return neverSettles();
-        },
-      },
+      { currentSurface: neverSettles },
     );
+    deps.createDeadline = () => ({
+      remainingMs: () => 1,
+      throwIfExpired() {},
+      async race<T>(_operation: string, promise: Promise<T>): Promise<T> {
+        void promise.catch(() => undefined);
+        controller.abort(reason);
+        throw surfaceError;
+      },
+    });
 
-    const pending = runChatGptProConsult({
+    const result = await runChatGptProConsult({
       prompt: "Continue",
       thread: "current",
       signal: controller.signal,
     }, deps);
-    await started.promise;
-    const reason = new Error("cancelled");
-    controller.abort(reason);
-    const result = await pending;
 
     expect(deps.calls).toEqual([]);
     expect(deps.closeCalls).toBe(1);
@@ -318,6 +319,37 @@ describe("runChatGptProConsult", () => {
     expect(result.details.blocker).toMatchObject({ code: "consult_error" });
     expect(result.details.blocker).not.toMatchObject({ code: "current_chatgpt_surface_missing" });
     expect(result.details.error).toEqual({ name: "Error", message: "cancelled" });
+  });
+
+  test("uses the deadline reason when current preflight rejects as the deadline aborts", async () => {
+    const surfaceError = new Error("surface closed");
+    const timeoutError = new Error("chatgpt.current_surface exceeded chatgpt_pro_consult timeout");
+    timeoutError.name = "TimeoutError";
+    const deps = depsReturning(
+      { ok: true, status: "ok", output_text: "should not run", warnings: [] },
+      { currentSurface: neverSettles },
+    );
+    deps.createDeadline = (_timeoutMs, _now, onExpire) => ({
+      remainingMs: () => 1,
+      throwIfExpired() {},
+      async race<T>(_operation: string, promise: Promise<T>): Promise<T> {
+        void promise.catch(() => undefined);
+        onExpire?.(timeoutError);
+        throw surfaceError;
+      },
+    });
+
+    const result = await runChatGptProConsult({ prompt: "Continue", thread: "current" }, deps);
+
+    expect(deps.calls).toEqual([]);
+    expect(deps.closeCalls).toBe(1);
+    expect(deps.browserSignal?.reason).toBe(timeoutError);
+    expect(result.details.status).toBe("timeout");
+    expect(result.details.blocker).toMatchObject({
+      code: "consult_timeout",
+      message: timeoutError.message,
+    });
+    expect(result.details.error).toEqual({ name: "TimeoutError", message: timeoutError.message });
   });
 
   test("does not preflight current-thread surface when its deadline is already expired", async () => {
@@ -485,5 +517,58 @@ describe("runChatGptProConsult", () => {
       fieldPath: ["session", "login"],
     });
     expect(deps.closeCalls).toBe(0);
+  });
+});
+
+describe("createConsultDeadline", () => {
+  test("observes an eager rejection when race starts after expiry", async () => {
+    const deadline = createConsultDeadline(0, () => new Date("2026-06-22T00:00:00.000Z"));
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", recordUnhandled);
+
+    try {
+      const inputError = new Error("input rejected after deadline abort");
+      const input = Promise.reject(inputError);
+
+      await expect(deadline.race("chatgpt.ask", input)).rejects.toMatchObject({ name: "TimeoutError" });
+      await new Promise<void>(resolve => setImmediate(resolve));
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", recordUnhandled);
+    }
+  });
+
+  test("reuses one TimeoutError and expires once across repeated checks", async () => {
+    const expirations: Error[] = [];
+    const deadline = createConsultDeadline(
+      0,
+      () => new Date("2026-06-22T00:00:00.000Z"),
+      error => expirations.push(error),
+    );
+    let first: unknown;
+    let second: unknown;
+
+    try {
+      deadline.throwIfExpired("first");
+    } catch (error) {
+      first = error;
+    }
+    try {
+      deadline.throwIfExpired("second");
+    } catch (error) {
+      second = error;
+    }
+
+    expect(first).toBeInstanceOf(Error);
+    expect((first as Error).name).toBe("TimeoutError");
+    expect((first as Error).message).toContain("first");
+    expect(second).toBe(first);
+    await expect(deadline.race("third", Promise.resolve("unused"))).rejects.toBe(first);
+    expect(expirations).toHaveLength(1);
+    expect(expirations[0]).toBe(first);
   });
 });
