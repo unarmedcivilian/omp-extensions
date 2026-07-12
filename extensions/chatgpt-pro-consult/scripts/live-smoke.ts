@@ -11,7 +11,6 @@ export const DEFAULT_SMOKE_PROMPT = "Reply with exactly: omp smoke ok";
 export interface LiveSmokeArgs {
   prompt: string;
   thread?: ChatGptProThread;
-  timeoutMs?: number;
   zipPath?: string;
   keepSurface?: boolean;
 }
@@ -24,7 +23,6 @@ interface FlagReadResult {
 export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
   let prompt = DEFAULT_SMOKE_PROMPT;
   let thread: ChatGptProThread | undefined;
-  let timeoutMs: number | undefined;
   let keepSurface: boolean | undefined;
   let zipPath: string | undefined;
 
@@ -74,18 +72,6 @@ export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
       continue;
     }
 
-    if (arg.startsWith("--timeout-ms=")) {
-      timeoutMs = parseTimeoutMs(arg.slice("--timeout-ms=".length));
-      continue;
-    }
-
-    if (arg === "--timeout-ms") {
-      const read = readFlagValue(argv, index, "--timeout-ms");
-      timeoutMs = parseTimeoutMs(read.value);
-      index = read.nextIndex;
-      continue;
-    }
-
     throw new Error(`Unknown live smoke argument: ${arg ?? "<missing>"}`);
   }
 
@@ -93,7 +79,6 @@ export function parseLiveSmokeArgs(argv: readonly string[]): LiveSmokeArgs {
 
   const parsed: LiveSmokeArgs = { prompt };
   if (thread) parsed.thread = thread;
-  if (timeoutMs !== undefined) parsed.timeoutMs = timeoutMs;
   if (zipPath !== undefined) parsed.zipPath = zipPath;
   if (keepSurface !== undefined) parsed.keepSurface = keepSurface;
   return parsed;
@@ -138,15 +123,6 @@ function readFlagValue(argv: readonly string[], index: number, flag: string): Fl
 function parseThread(value: string): ChatGptProThread {
   if (value === "new" || value === "current") return value;
   throw new Error(`--thread must be "new" or "current", got ${JSON.stringify(value)}`);
-}
-
-function parseTimeoutMs(value: string): number {
-  const timeoutMs = Number(value);
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new Error(`--timeout-ms must be a positive number, got ${JSON.stringify(value)}`);
-  }
-
-  return timeoutMs;
 }
 
 function writeSmokeOutput(result: ChatGptProConsultResult): void {

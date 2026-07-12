@@ -27,17 +27,23 @@ describe("live smoke script", () => {
       "Explain the tradeoff.",
       "--thread",
       "current",
-      "--timeout-ms",
-      "45000",
       "--zip-path",
       "fixtures/context.zip",
       "--keep-surface",
     ])).toEqual({
       prompt: "Explain the tradeoff.",
       thread: "current",
-      timeoutMs: 45_000,
       keepSurface: true,
       zipPath: "fixtures/context.zip",
     });
+  });
+
+  test("parseLiveSmokeArgs rejects removed timeout flags", () => {
+    expect(() => parseLiveSmokeArgs(["--timeout-ms", "45000"])).toThrow(
+      "Unknown live smoke argument: --timeout-ms",
+    );
+    expect(() => parseLiveSmokeArgs(["--timeout-ms=45000"])).toThrow(
+      "Unknown live smoke argument: --timeout-ms=45000",
+    );
   });
 });
