@@ -257,6 +257,54 @@ describe("ChatGPT Pro consult extension", () => {
     expect(response.isError).toBeUndefined();
   });
 
+  test("formats elapsed hours as total minutes in progress text", async () => {
+    const fake = makeFakePi();
+    const updates: AgentToolResult<ChatGptProConsultToolDetails>[] = [];
+    const progress = {
+      phase: "waiting",
+      message: "Prompt submission initiated; waiting for ChatGPT Pro…",
+      elapsedMs: 3_600_000,
+      timeoutMs: 7_200_000,
+      thread: "new",
+      hasZip: false,
+    } as const;
+    const details: ChatGptProConsultDetails = {
+      ok: true,
+      status: "ok",
+      warnings: [],
+      thread: "new",
+      keptSurface: false,
+    };
+    const extension = createChatGptProConsultExtension({
+      consult: async params => {
+        params.onProgress?.(progress);
+        return successfulResult(details);
+      },
+    });
+
+    extension(fake.api);
+    await fake.tools[0]!.execute(
+      "tool-call-hour-boundary",
+      { prompt: "Explain the boundary." },
+      undefined,
+      update => {
+        updates.push(update);
+      },
+    );
+
+    expect(updates).toEqual([
+      {
+        content: [
+          {
+            type: "text",
+            text: "Prompt submission initiated; waiting for ChatGPT Pro… (60m 0s elapsed)",
+          },
+        ],
+        details: { kind: "progress", progress },
+      },
+    ]);
+  });
+
   test("execute omits consult progress when no update callback is provided", async () => {
     const fake = makeFakePi();
     const calls: ChatGptProConsultParams[] = [];
