@@ -207,6 +207,9 @@ export async function runChatGptProConsult(
 
   try {
     progress.update("preparing", "Preparing ChatGPT Pro consult…");
+    if (operationSignal.aborted) {
+      return errorResult(abortErrorFromSignal(operationSignal), thread, false, undefined);
+    }
 
     let promptPossiblySubmitted = false;
     const lifecycle: ConsultLifecycle = {
@@ -484,6 +487,7 @@ async function askWithPreferredProMode(args: {
   args.onModeFallback?.();
   throwIfAborted(args.signal);
   args.deadline.throwIfExpired("chatgpt.ask");
+  if (!args.canFallbackToLegacyMode()) return preferred;
   return askWithMode(args, LEGACY_PRO_MODE_LABEL);
 }
 

@@ -13,6 +13,7 @@ interface FakeDeps extends ChatGptProConsultDeps {
   readonly selectedCalls: number;
   readonly closeCalls: number;
   readonly browserSignal: AbortSignal | undefined;
+  markPromptSubmitted(): void;
 }
 
 function depsReturning(
@@ -30,7 +31,7 @@ function depsReturning(
   let selectedCalls = 0;
   let closeCalls = 0;
   let browserSignal: AbortSignal | undefined;
-  let markPromptSubmitted: (() => void) | undefined;
+  let markPromptSubmittedHook: (() => void) | undefined;
 
   return {
     calls,
@@ -48,10 +49,13 @@ function depsReturning(
     get browserSignal() {
       return browserSignal;
     },
+    markPromptSubmitted() {
+      markPromptSubmittedHook?.();
+    },
     createChatGptClient: () => ({
       ask: async (args: unknown) => {
         calls.push(args);
-        if (options.markSubmittedImmediately) markPromptSubmitted?.();
+        if (options.markSubmittedImmediately) markPromptSubmittedHook?.();
         if (typeof result === "function") return await result();
         return result;
       },
@@ -62,14 +66,14 @@ function depsReturning(
       },
       runPlan: async (plan: unknown) => {
         calls.push({ method: "runPlan", plan });
-        if (options.markSubmittedImmediately) markPromptSubmitted?.();
+        if (options.markSubmittedImmediately) markPromptSubmittedHook?.();
         if (typeof result === "function") return await result();
         return result;
       },
     }),
     createBrowser: browserOptions => {
       browserSignal = browserOptions.signal;
-      markPromptSubmitted = () => browserOptions.lifecycle.markPromptSubmitted();
+      markPromptSubmittedHook = () => browserOptions.lifecycle.markPromptSubmitted();
       return {
         requireSelectedChatGptSurface: async () => {
           selectedCalls += 1;
@@ -186,6 +190,65 @@ describe("runChatGptProConsult", () => {
       surfaceRef: "surface:7",
     });
     expect(heartbeat.scheduled).toBe(1);
+    expect(heartbeat.stopCalls).toBe(1);
+  });
+
+  test("stops a new-thread consult when preparing progress aborts", async () => {
+    const controller = new AbortController();
+    const heartbeat = manualHeartbeat();
+    const snapshots: ChatGptProConsultProgress[] = [];
+    const deps = depsReturning(
+      { ok: true, status: "ok", output_text: "should not run", warnings: [] },
+      { scheduleHeartbeat: heartbeat.schedule },
+    );
+
+    const result = await runChatGptProConsult({
+      prompt: "Hi",
+      signal: controller.signal,
+      onProgress: snapshot => {
+        snapshots.push(snapshot);
+        if (snapshot.phase === "preparing") {
+          controller.abort(new Error("cancelled during preparation"));
+        }
+      },
+    }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.details.status).toBe("error");
+    expect(snapshots.map(snapshot => snapshot.phase)).toEqual(["preparing"]);
+    expect(deps.selectedCalls).toBe(0);
+    expect(deps.calls).toEqual([]);
+    expect(deps.closeCalls).toBe(0);
+    expect(heartbeat.stopCalls).toBe(1);
+  });
+
+  test("does not preflight current-thread work when preparing progress aborts", async () => {
+    const controller = new AbortController();
+    const heartbeat = manualHeartbeat();
+    const snapshots: ChatGptProConsultProgress[] = [];
+    const deps = depsReturning(
+      { ok: true, status: "ok", output_text: "should not run", warnings: [] },
+      { scheduleHeartbeat: heartbeat.schedule },
+    );
+
+    const result = await runChatGptProConsult({
+      prompt: "Continue",
+      thread: "current",
+      signal: controller.signal,
+      onProgress: snapshot => {
+        snapshots.push(snapshot);
+        if (snapshot.phase === "preparing") {
+          controller.abort(new Error("cancelled during current preparation"));
+        }
+      },
+    }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.details.status).toBe("error");
+    expect(snapshots.map(snapshot => snapshot.phase)).toEqual(["preparing"]);
+    expect(deps.selectedCalls).toBe(0);
+    expect(deps.calls).toEqual([]);
+    expect(deps.closeCalls).toBe(0);
     expect(heartbeat.stopCalls).toBe(1);
   });
 
@@ -478,6 +541,55 @@ describe("runChatGptProConsult", () => {
 
     expect(result.ok).toBe(false);
     expect(deps.calls).toHaveLength(1);
+    expect(heartbeat.stopCalls).toBe(1);
+  });
+
+  test("does not construct a legacy-mode request when fallback progress marks possible submission", async () => {
+    const heartbeat = manualHeartbeat();
+    const snapshots: ChatGptProConsultProgress[] = [];
+    let attempts = 0;
+    const deps = depsReturning(() => {
+      attempts += 1;
+      if (attempts === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: "partial",
+          warnings: [],
+          steps: [
+            { command: "session.bootstrap", ok: true, status: "ok" },
+            { command: "modes.set", ok: false, status: "unsupported" },
+          ],
+          blocker: {
+            kind: "selector_drift",
+            code: "visible_candidate_not_found",
+            message: "Mode option \"Pro Extended\" was not found or was ambiguous.",
+          },
+          context: { timestamp: "t" },
+        });
+      }
+      return Promise.resolve({ ok: true, status: "ok", output_text: "should not run", warnings: [] });
+    }, { scheduleHeartbeat: heartbeat.schedule });
+
+    const result = await runChatGptProConsult({
+      prompt: "Hi",
+      onProgress: snapshot => {
+        snapshots.push(snapshot);
+        if (snapshot.message.includes("retrying legacy Pro mode")) {
+          deps.markPromptSubmitted();
+        }
+      },
+    }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(deps.calls).toHaveLength(1);
+    expect(result.details.keptSurface).toBe(true);
+    expect(deps.closeCalls).toBe(0);
+    expect(snapshots.map(snapshot => snapshot.phase)).toEqual([
+      "preparing",
+      "submitting",
+      "submitting",
+      "waiting",
+    ]);
     expect(heartbeat.stopCalls).toBe(1);
   });
 
