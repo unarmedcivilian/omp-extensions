@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentToolResult, ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import chatGptProConsultExtension, { createChatGptProConsultExtension } from "../src/index.js";
+import chatGptProConsultExtension, {
+  createChatGptProConsultExtension,
+  type ChatGptProConsultToolDetails,
+} from "../src/index.js";
 import type {
   ChatGptProConsultDetails,
   ChatGptProConsultParams,
@@ -43,7 +46,8 @@ interface TestTool {
     toolCallId: string,
     params: ConsultToolParams,
     signal?: AbortSignal,
-  ): Promise<AgentToolResult<ChatGptProConsultDetails>>;
+    onUpdate?: (update: AgentToolResult<ChatGptProConsultToolDetails>) => void,
+  ): Promise<AgentToolResult<ChatGptProConsultToolDetails>>;
 }
 
 interface FakePi {
@@ -182,9 +186,19 @@ describe("ChatGPT Pro consult extension", () => {
     expect(tool.parameters.shape?.keep_surface?.description).toContain("cmux browser surface");
   });
 
-  test("execute maps tool params and signal into the injected consult dependency", async () => {
+  test("execute maps tool params, progress updates, and the final result", async () => {
     const fake = makeFakePi();
     const calls: ChatGptProConsultParams[] = [];
+    const updates: AgentToolResult<ChatGptProConsultToolDetails>[] = [];
+    const progress = {
+      phase: "waiting",
+      message: "Prompt submission initiated; waiting for ChatGPT Pro…",
+      elapsedMs: 75_000,
+      timeoutMs: 7_200_000,
+      thread: "new",
+      hasZip: false,
+      surfaceRef: "surface:7",
+    } as const;
     const details: ChatGptProConsultDetails = {
       ok: true,
       status: "ok",
@@ -196,6 +210,7 @@ describe("ChatGPT Pro consult extension", () => {
     const extension = createChatGptProConsultExtension({
       consult: async params => {
         calls.push(params);
+        params.onProgress?.(progress);
         return successfulResult(details);
       },
     });
@@ -211,6 +226,9 @@ describe("ChatGPT Pro consult extension", () => {
         keep_surface: true,
       },
       signal,
+      update => {
+        updates.push(update);
+      },
     );
 
     expect(calls).toHaveLength(1);
@@ -222,9 +240,50 @@ describe("ChatGPT Pro consult extension", () => {
     });
     expect(calls[0]).not.toHaveProperty("timeoutMs");
     expect(calls[0]?.signal).toBe(signal);
+    expect(updates).toEqual([
+      {
+        content: [
+          {
+            type: "text",
+            text: "Prompt submission initiated; waiting for ChatGPT Pro… (1m 15s elapsed)",
+          },
+        ],
+        details: { kind: "progress", progress },
+      },
+    ]);
     expect(response.content).toEqual([{ type: "text", text: "Answer text" }]);
     expect(response.details).toBe(details);
     expect(response.details).not.toHaveProperty("contentText");
+    expect(response.isError).toBeUndefined();
+  });
+
+  test("execute omits consult progress when no update callback is provided", async () => {
+    const fake = makeFakePi();
+    const calls: ChatGptProConsultParams[] = [];
+    const details: ChatGptProConsultDetails = {
+      ok: true,
+      status: "ok",
+      warnings: [],
+      thread: "new",
+      keptSurface: false,
+    };
+    const extension = createChatGptProConsultExtension({
+      consult: async params => {
+        calls.push(params);
+        return successfulResult(details);
+      },
+    });
+
+    extension(fake.api);
+    const response = await fake.tools[0]!.execute("tool-call-without-updates", {
+      prompt: "Explain without progress.",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toHaveProperty("onProgress");
+    expect(calls[0]?.onProgress).toBeUndefined();
+    expect(response.content).toEqual([{ type: "text", text: "Answer text" }]);
+    expect(response.details).toBe(details);
     expect(response.isError).toBeUndefined();
   });
 
