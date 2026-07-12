@@ -9,12 +9,38 @@ import {
 
 export type ChatGptProThread = "new" | "current";
 
+export type ChatGptProConsultProgressPhase =
+  | "preparing"
+  | "submitting"
+  | "waiting";
+
+export interface ChatGptProConsultProgress {
+  phase: ChatGptProConsultProgressPhase;
+  message: string;
+  elapsedMs: number;
+  timeoutMs: number;
+  thread: ChatGptProThread;
+  hasZip: boolean;
+  surfaceRef?: string;
+}
+
+export interface ChatGptProConsultProgressDetails {
+  kind: "progress";
+  progress: ChatGptProConsultProgress;
+}
+
+export type ScheduleConsultHeartbeat = (
+  callback: () => void,
+  intervalMs: number,
+) => () => void;
+
 export interface ChatGptProConsultParams {
   prompt: string;
   zipPath?: string;
   thread?: ChatGptProThread;
   keepSurface?: boolean;
   signal?: AbortSignal;
+  onProgress?: (progress: ChatGptProConsultProgress) => void;
 }
 
 export interface ChatGptProConsultDetails {
@@ -59,6 +85,7 @@ export interface ChatGptProConsultDeps {
   }) => CmuxBrowserAdapter;
   createChatGptClient?: (browser: CmuxBrowserAdapter) => ChatGptClient;
   now?: () => Date;
+  scheduleHeartbeat?: ScheduleConsultHeartbeat;
 }
 
 export interface ChatGptClient {
@@ -110,6 +137,7 @@ export interface ConsultCommandResult {
 
 const CONSULT_TIMEOUT_MS = 120 * 60_000;
 const MAX_MODE_TIMEOUT_MS = 15_000;
+const PROGRESS_HEARTBEAT_MS = 15_000;
 const MIN_MODE_TIMEOUT_MS = 1_000;
 const READ_RESERVE_MS = 5_000;
 const NEW_THREAD_OPEN_LOAD_TIMEOUT_MS = 15_000;
@@ -117,6 +145,15 @@ const NEW_THREAD_OPEN_SETTLE_MS = 2_000;
 const CHATGPT_INTERACTION_SETTLE_MS = 2_000;
 const PREFERRED_PRO_MODE_LABEL = "Pro Extended";
 const LEGACY_PRO_MODE_LABEL = "pro";
+
+const scheduleConsultHeartbeat: ScheduleConsultHeartbeat = (
+  callback,
+  intervalMs,
+) => {
+  const timer = setInterval(callback, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+};
 
 const ACTION_REQUIRED_BLOCKERS: Record<string, true> = {
   login: true,
@@ -147,77 +184,177 @@ export async function runChatGptProConsult(
     return errorResult(error, thread, false, undefined);
   }
 
+  const now = deps.now ?? (() => new Date());
   const deadlineController = new AbortController();
   const deadline = (deps.createDeadline ?? createConsultDeadline)(
     CONSULT_TIMEOUT_MS,
-    deps.now ?? (() => new Date()),
+    now,
     error => deadlineController.abort(error),
   );
   const operationSignal = callerSignal
     ? AbortSignal.any([callerSignal, deadlineController.signal])
     : deadlineController.signal;
-  let promptPossiblySubmitted = false;
-  const lifecycle: ConsultLifecycle = {
-    markPromptSubmitted() {
-      promptPossiblySubmitted = true;
-    },
-  };
-
-  const browserOptions = {
-    signal: operationSignal,
-    deadline,
-    lifecycle,
-    openLoadTimeoutMs: NEW_THREAD_OPEN_LOAD_TIMEOUT_MS,
-    openSettleMs: NEW_THREAD_OPEN_SETTLE_MS,
-    interactionSettleMs: CHATGPT_INTERACTION_SETTLE_MS,
-  };
-  const browser = deps.createBrowser?.(browserOptions) ?? createCmuxBrowserAdapter(browserOptions);
-  const modeTimeoutMs = Math.min(MAX_MODE_TIMEOUT_MS, Math.max(MIN_MODE_TIMEOUT_MS, Math.floor(CONSULT_TIMEOUT_MS / 4)));
-  const waitTimeoutMs = Math.max(MIN_MODE_TIMEOUT_MS, CONSULT_TIMEOUT_MS - modeTimeoutMs - READ_RESERVE_MS);
-
-  let currentTarget: SelectedChatGptSurface | undefined;
-  if (thread === "current") {
-    try {
-      deadline.throwIfExpired("chatgpt.current_surface");
-      currentTarget = await deadline.race(
-        "chatgpt.current_surface",
-        raceAbort(browser.requireSelectedChatGptSurface(operationSignal), operationSignal),
-      );
-    } catch (error) {
-      const abortReason = operationSignal.aborted ? abortErrorFromSignal(operationSignal) : undefined;
-      await closeOwnedSurfacesQuietly(browser);
-      return abortReason !== undefined || isTimeoutOrAbortError(error)
-        ? errorResult(abortReason ?? error, thread, false, browser.primarySurfaceRef())
-        : blockedPreflightResult(error, thread);
-    }
-  }
-
-  const client = deps.createChatGptClient?.(browser) ?? (createChatGPT({ browser }) as unknown as ChatGptClient);
-  let result: ConsultCommandResult | undefined;
+  let browser: CmuxBrowserAdapter | undefined;
+  const progress = createConsultProgressReporter({
+    now,
+    timeoutMs: CONSULT_TIMEOUT_MS,
+    thread,
+    hasZip: zipPath !== undefined,
+    getSurfaceRef: () => browser?.primarySurfaceRef(),
+    onProgress: params.onProgress,
+    scheduleHeartbeat: deps.scheduleHeartbeat ?? scheduleConsultHeartbeat,
+  });
 
   try {
-    deadline.throwIfExpired("chatgpt.ask");
-    result = await askWithPreferredProMode({
-      client,
-      prompt,
-      thread,
-      currentTarget,
-      modeTimeoutMs,
-      waitTimeoutMs,
-      deadline,
-      signal: operationSignal,
-      zipPath,
-    });
+    progress.update("preparing", "Preparing ChatGPT Pro consult…");
 
-    const submitted = promptPossiblySubmitted || hasSubmittedPrompt(result);
-    const keptSurface = shouldLeaveSurfaceOpen(result, submitted, params.keepSurface === true);
-    if (!keptSurface) await closeOwnedSurfacesQuietly(browser);
-    return mapCommandResult(result, thread, keptSurface, browser.primarySurfaceRef());
-  } catch (error) {
-    const submitted = promptPossiblySubmitted || (result ? hasSubmittedPrompt(result) : false);
-    if (!submitted) await closeOwnedSurfacesQuietly(browser);
-    return errorResult(error, thread, submitted, browser.primarySurfaceRef());
+    let promptPossiblySubmitted = false;
+    const lifecycle: ConsultLifecycle = {
+      markPromptSubmitted() {
+        if (promptPossiblySubmitted) return;
+        promptPossiblySubmitted = true;
+        progress.update(
+          "waiting",
+          "Prompt submission initiated; waiting for ChatGPT Pro…",
+        );
+      },
+    };
+
+    const browserOptions = {
+      signal: operationSignal,
+      deadline,
+      lifecycle,
+      openLoadTimeoutMs: NEW_THREAD_OPEN_LOAD_TIMEOUT_MS,
+      openSettleMs: NEW_THREAD_OPEN_SETTLE_MS,
+      interactionSettleMs: CHATGPT_INTERACTION_SETTLE_MS,
+    };
+    const activeBrowser = deps.createBrowser?.(browserOptions) ?? createCmuxBrowserAdapter(browserOptions);
+    browser = activeBrowser;
+    const modeTimeoutMs = Math.min(MAX_MODE_TIMEOUT_MS, Math.max(MIN_MODE_TIMEOUT_MS, Math.floor(CONSULT_TIMEOUT_MS / 4)));
+    const waitTimeoutMs = Math.max(MIN_MODE_TIMEOUT_MS, CONSULT_TIMEOUT_MS - modeTimeoutMs - READ_RESERVE_MS);
+
+    let currentTarget: SelectedChatGptSurface | undefined;
+    if (thread === "current") {
+      try {
+        deadline.throwIfExpired("chatgpt.current_surface");
+        currentTarget = await deadline.race(
+          "chatgpt.current_surface",
+          raceAbort(activeBrowser.requireSelectedChatGptSurface(operationSignal), operationSignal),
+        );
+      } catch (error) {
+        const abortReason = operationSignal.aborted ? abortErrorFromSignal(operationSignal) : undefined;
+        await closeOwnedSurfacesQuietly(activeBrowser);
+        return abortReason !== undefined || isTimeoutOrAbortError(error)
+          ? errorResult(abortReason ?? error, thread, false, activeBrowser.primarySurfaceRef())
+          : blockedPreflightResult(error, thread);
+      }
+    }
+
+    const client = deps.createChatGptClient?.(activeBrowser) ?? (createChatGPT({ browser: activeBrowser }) as unknown as ChatGptClient);
+    let result: ConsultCommandResult | undefined;
+
+    try {
+      deadline.throwIfExpired("chatgpt.ask");
+      progress.update(
+        "submitting",
+        zipPath
+          ? "Preparing ChatGPT Pro, uploading the ZIP, and submitting the prompt…"
+          : "Opening ChatGPT Pro and submitting the prompt…",
+      );
+      throwIfAborted(operationSignal);
+      deadline.throwIfExpired("chatgpt.ask");
+      result = await askWithPreferredProMode({
+        client,
+        prompt,
+        thread,
+        currentTarget,
+        modeTimeoutMs,
+        waitTimeoutMs,
+        deadline,
+        signal: operationSignal,
+        zipPath,
+        canFallbackToLegacyMode: () => !promptPossiblySubmitted,
+        onModeFallback: () => progress.update(
+          "submitting",
+          "Preferred Pro mode unavailable; retrying legacy Pro mode…",
+        ),
+      });
+
+      const submitted = promptPossiblySubmitted || hasSubmittedPrompt(result);
+      const keptSurface = shouldLeaveSurfaceOpen(result, submitted, params.keepSurface === true);
+      if (!keptSurface) await closeOwnedSurfacesQuietly(activeBrowser);
+      return mapCommandResult(result, thread, keptSurface, activeBrowser.primarySurfaceRef());
+    } catch (error) {
+      const submitted = promptPossiblySubmitted || (result ? hasSubmittedPrompt(result) : false);
+      if (!submitted) await closeOwnedSurfacesQuietly(activeBrowser);
+      return errorResult(error, thread, submitted, activeBrowser.primarySurfaceRef());
+    }
+  } finally {
+    progress.stop();
   }
+}
+
+function createConsultProgressReporter(options: {
+  now: () => Date;
+  timeoutMs: number;
+  thread: ChatGptProThread;
+  hasZip: boolean;
+  getSurfaceRef: () => string | undefined;
+  onProgress: ((progress: ChatGptProConsultProgress) => void) | undefined;
+  scheduleHeartbeat: ScheduleConsultHeartbeat;
+}) {
+  const startedAt = options.now().getTime();
+  let phase: ChatGptProConsultProgressPhase = "preparing";
+  let message = "Preparing ChatGPT Pro consult…";
+  let stopped = false;
+  let lastElapsedMs = 0;
+
+  const snapshot = (): ChatGptProConsultProgress => {
+    const elapsedMs = Math.max(
+      lastElapsedMs,
+      options.now().getTime() - startedAt,
+      0,
+    );
+    lastElapsedMs = elapsedMs;
+    return {
+      phase,
+      message,
+      elapsedMs,
+      timeoutMs: options.timeoutMs,
+      thread: options.thread,
+      hasZip: options.hasZip,
+      surfaceRef: options.getSurfaceRef(),
+    };
+  };
+
+  let cancelHeartbeat = () => {};
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    cancelHeartbeat();
+  };
+  const emit = () => {
+    if (!stopped && options.onProgress) options.onProgress(snapshot());
+  };
+
+  if (options.onProgress) {
+    cancelHeartbeat = options.scheduleHeartbeat(() => {
+      try {
+        emit();
+      } catch {
+        stop();
+      }
+    }, PROGRESS_HEARTBEAT_MS);
+  }
+
+  return {
+    update(nextPhase: ChatGptProConsultProgressPhase, nextMessage: string) {
+      phase = nextPhase;
+      message = nextMessage;
+      emit();
+    },
+    stop,
+  };
 }
 
 function existingTabFor(surface: SelectedChatGptSurface): ExistingTabPolicy {
@@ -337,9 +474,15 @@ async function askWithPreferredProMode(args: {
   deadline: ConsultDeadline;
   signal: AbortSignal;
   zipPath: string | undefined;
+  canFallbackToLegacyMode: () => boolean;
+  onModeFallback?: () => void;
 }): Promise<ConsultCommandResult> {
   const preferred = await askWithMode(args, PREFERRED_PRO_MODE_LABEL);
-  if (!isModeFallbackCandidate(preferred)) return preferred;
+  if (!isModeFallbackCandidate(preferred) || !args.canFallbackToLegacyMode()) return preferred;
+  throwIfAborted(args.signal);
+  args.deadline.throwIfExpired("chatgpt.ask");
+  args.onModeFallback?.();
+  throwIfAborted(args.signal);
   args.deadline.throwIfExpired("chatgpt.ask");
   return askWithMode(args, LEGACY_PRO_MODE_LABEL);
 }
