@@ -13,10 +13,15 @@ Parameters:
 | `prompt` | Yes | Prompt to send to ChatGPT Pro. Empty prompts are rejected. |
 | `zip_path` | No | Absolute or relative path to one local `.zip` file to upload before submitting the prompt. The path is resolved on the host running the extension. |
 | `thread` | No | `new` opens a fresh ChatGPT thread. `current` uses the selected/current ChatGPT surface. Defaults to `new`. |
-| `timeout_ms` | No | Maximum time to spend selecting Pro mode, waiting for the answer, and reading Markdown. |
 | `keep_surface` | No | Keeps the cmux browser surface open after completion. |
 
 The tool returns Markdown as text content and structured details with status, warnings, thread, surface information, and any blocker or error details. It reports blockers/details for login requirements, action-required UI such as CAPTCHA/modals/rate limits, selector drift, timeouts, and a missing current ChatGPT surface when `thread: "current"` has no selected ChatGPT tab.
+
+## Progress and timeout
+
+Each consult runs in the foreground under a fixed, non-configurable 120-minute overall ceiling. While it runs, the tool emits transient `preparing`, `submitting`, and `waiting` status updates, and refreshes the current status every 15 seconds with elapsed time. These updates are status-only: they do not expose partial ChatGPT output, a completion percentage, or an ETA.
+
+`Prompt submission initiated` is a fail-closed possible-submission boundary: once reported, the prompt may already have reached ChatGPT, so the extension does not retry the submission. OMP cancellation aborts the underlying browser and consult work. A timeout or other failure after this possible-submission boundary leaves the ChatGPT surface open and reports its `surfaceRef` for inspection.
 
 ## Privacy and safety
 
