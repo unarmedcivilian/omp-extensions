@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { resolve } from "node:path";
 import {
+  createConsultDeadline,
   runChatGptProConsult,
   type ChatGptProConsultDeps,
 } from "../src/consult.js";
@@ -9,23 +10,38 @@ interface FakeDeps extends ChatGptProConsultDeps {
   calls: unknown[];
   readonly selectedCalls: number;
   readonly closeCalls: number;
+  readonly browserSignal: AbortSignal | undefined;
 }
 
 function depsReturning(
   result: unknown | (() => Promise<unknown>),
-  options: { currentError?: Error; markSubmittedImmediately?: boolean; now?: () => Date } = {},
+  options: {
+    currentError?: Error;
+    currentSurface?: () => Promise<{ tabId: string; surface: string; url: string }>;
+    deadlineMs?: number;
+    markSubmittedImmediately?: boolean;
+    now?: () => Date;
+  } = {},
 ): FakeDeps {
   const calls: unknown[] = [];
   let selectedCalls = 0;
   let closeCalls = 0;
+  let browserSignal: AbortSignal | undefined;
 
   return {
     calls,
+    createDeadline: options.deadlineMs === undefined
+      ? undefined
+      : (_timeoutMs: number, now: () => Date, onExpire?: (error: Error) => void) =>
+          createConsultDeadline(options.deadlineMs!, now, onExpire),
     get selectedCalls() {
       return selectedCalls;
     },
     get closeCalls() {
       return closeCalls;
+    },
+    get browserSignal() {
+      return browserSignal;
     },
     createChatGptClient: () => ({
       ask: async (args: unknown) => {
@@ -45,10 +61,12 @@ function depsReturning(
       },
     }),
     createBrowser: browserOptions => {
+      browserSignal = browserOptions.signal;
       if (options.markSubmittedImmediately) browserOptions.lifecycle.markPromptSubmitted();
       return {
         requireSelectedChatGptSurface: async () => {
           selectedCalls += 1;
+          if (options.currentSurface) return await options.currentSurface();
           if (options.currentError) throw options.currentError;
           return { tabId: "surface:42", surface: "surface:42", url: "https://chatgpt.com/c/current" };
         },
@@ -62,15 +80,15 @@ function depsReturning(
   } as FakeDeps;
 }
 
-function neverSettles(): Promise<unknown> {
-  return Promise.withResolvers<unknown>().promise;
+function neverSettles<T = unknown>(): Promise<T> {
+  return Promise.withResolvers<T>().promise;
 }
 
 describe("runChatGptProConsult", () => {
   test("submits a new-thread Pro consult with Markdown read", async () => {
     const deps = depsReturning({ ok: true, status: "ok", output_text: "omp smoke ok", warnings: [], context: { timestamp: "t" } });
 
-    const result = await runChatGptProConsult({ prompt: "  Reply once  ", timeoutMs: 90_000 }, deps);
+    const result = await runChatGptProConsult({ prompt: "  Reply once  " }, deps);
 
     expect(deps.calls).toEqual([{
       prompt: "Reply once",
@@ -78,7 +96,7 @@ describe("runChatGptProConsult", () => {
       existingTab: undefined,
       preferExistingTab: false,
       mode: { intelligence: "Pro Extended", timeoutMs: 15_000 },
-      wait: { timeoutMs: 70_000 },
+      wait: { timeoutMs: 7_180_000 },
       read: { format: "markdown" },
       report: false,
     }]);
@@ -90,7 +108,7 @@ describe("runChatGptProConsult", () => {
   test("attaches a single ZIP file through the SDK file workflow", async () => {
     const deps = depsReturning({ ok: true, status: "ok", output_text: "uploaded", warnings: [], context: { timestamp: "t" } });
 
-    const result = await runChatGptProConsult({ prompt: "  Inspect this  ", zipPath: "fixtures/context.zip", timeoutMs: 90_000 }, deps);
+    const result = await runChatGptProConsult({ prompt: "  Inspect this  ", zipPath: "fixtures/context.zip" }, deps);
 
     expect(result.ok).toBe(true);
     expect(deps.calls).toEqual([{
@@ -102,8 +120,8 @@ describe("runChatGptProConsult", () => {
           { id: "bootstrap", command: "session.bootstrap", args: { preferExistingTab: false } },
           { id: "new", command: "threads.new" },
           { id: "mode", command: "modes.set", args: { intelligence: "Pro Extended", timeoutMs: 15_000 } },
-          { id: "attach", command: "files.attach", args: { paths: [resolve("fixtures/context.zip")], timeoutMs: 70_000 } },
-          { id: "ask", command: "messages.ask", args: { text: "Inspect this", wait: { timeoutMs: 70_000 }, read: { format: "markdown" } } },
+          { id: "attach", command: "files.attach", args: { paths: [resolve("fixtures/context.zip")], timeoutMs: 7_180_000 } },
+          { id: "ask", command: "messages.ask", args: { text: "Inspect this", wait: { timeoutMs: 7_180_000 }, read: { format: "markdown" } } },
         ],
       },
     }]);
@@ -187,7 +205,7 @@ describe("runChatGptProConsult", () => {
       },
       preferExistingTab: true,
       mode: { intelligence: "Pro Extended", timeoutMs: 15_000 },
-      wait: { timeoutMs: 100_000 },
+      wait: { timeoutMs: 7_180_000 },
       read: { format: "markdown" },
       report: false,
     }]);
@@ -270,11 +288,44 @@ describe("runChatGptProConsult", () => {
     expect(result.details.blocker).toMatchObject({ code: "current_chatgpt_surface_missing" });
   });
 
+  test("preserves a caller Error that aborts pending current-thread preflight", async () => {
+    const controller = new AbortController();
+    const started = Promise.withResolvers<void>();
+    const deps = depsReturning(
+      { ok: true, status: "ok", output_text: "should not run", warnings: [] },
+      {
+        currentSurface: () => {
+          started.resolve();
+          return neverSettles();
+        },
+      },
+    );
+
+    const pending = runChatGptProConsult({
+      prompt: "Continue",
+      thread: "current",
+      signal: controller.signal,
+    }, deps);
+    await started.promise;
+    const reason = new Error("cancelled");
+    controller.abort(reason);
+    const result = await pending;
+
+    expect(deps.calls).toEqual([]);
+    expect(deps.closeCalls).toBe(1);
+    expect(result.ok).toBe(false);
+    expect(result.details.status).toBe("error");
+    expect(result.details.blocker).toMatchObject({ code: "consult_error" });
+    expect(result.details.blocker).not.toMatchObject({ code: "current_chatgpt_surface_missing" });
+    expect(result.details.error).toEqual({ name: "Error", message: "cancelled" });
+  });
+
   test("does not preflight current-thread surface when its deadline is already expired", async () => {
     let nowCalls = 0;
     const deps = depsReturning(
       { ok: true, status: "ok", output_text: "should not run", warnings: [] },
       {
+        deadlineMs: 1,
         now: () => {
           nowCalls += 1;
           return new Date(nowCalls === 1 ? "2026-06-22T00:00:00.000Z" : "2026-06-22T00:00:00.002Z");
@@ -282,7 +333,7 @@ describe("runChatGptProConsult", () => {
       },
     );
 
-    const result = await runChatGptProConsult({ prompt: "Continue", thread: "current", timeoutMs: 1 }, deps);
+    const result = await runChatGptProConsult({ prompt: "Continue", thread: "current" }, deps);
 
     expect(deps.selectedCalls).toBe(0);
     expect(deps.calls).toEqual([]);
@@ -344,6 +395,7 @@ describe("runChatGptProConsult", () => {
     const deps = depsReturning(
       { ok: true, status: "ok", output_text: "should not run", warnings: [] },
       {
+        deadlineMs: 1,
         now: () => {
           nowCalls += 1;
           return new Date(nowCalls === 1 ? "2026-06-22T00:00:00.000Z" : "2026-06-22T00:00:00.002Z");
@@ -351,7 +403,7 @@ describe("runChatGptProConsult", () => {
       },
     );
 
-    const result = await runChatGptProConsult({ prompt: "Hi", timeoutMs: 1 }, deps);
+    const result = await runChatGptProConsult({ prompt: "Hi" }, deps);
 
     expect(deps.calls).toEqual([]);
     expect(result.ok).toBe(false);
@@ -360,27 +412,46 @@ describe("runChatGptProConsult", () => {
     expect(deps.closeCalls).toBe(1);
   });
 
-  test("closes owned surfaces when the SDK times out before submission is observed", async () => {
-    const deps = depsReturning(neverSettles);
+  test("closes owned surfaces when the internal deadline expires before submission is observed", async () => {
+    jest.useFakeTimers();
+    try {
+      const deps = depsReturning(neverSettles, { deadlineMs: 1 });
 
-    const result = await runChatGptProConsult({ prompt: "Hi", timeoutMs: 1 }, deps);
+      const pending = runChatGptProConsult({ prompt: "Hi" }, deps);
+      jest.advanceTimersByTime(1);
 
-    expect(result.ok).toBe(false);
-    expect(result.details.status).toBe("timeout");
-    expect(result.details.keptSurface).toBe(false);
-    expect(deps.closeCalls).toBe(1);
+      expect(deps.browserSignal?.aborted).toBe(true);
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      expect(result.details.status).toBe("timeout");
+      expect(result.details.keptSurface).toBe(false);
+      expect(deps.closeCalls).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
-  test("leaves surfaces open when the SDK hangs after the prompt may have been submitted", async () => {
-    const deps = depsReturning(neverSettles, { markSubmittedImmediately: true });
+  test("aborts browser work and leaves surfaces open when the post-submit deadline expires", async () => {
+    jest.useFakeTimers();
+    try {
+      const deps = depsReturning(neverSettles, { deadlineMs: 1, markSubmittedImmediately: true });
 
-    const result = await runChatGptProConsult({ prompt: "Hi", timeoutMs: 1 }, deps);
+      const pending = runChatGptProConsult({ prompt: "Hi" }, deps);
+      jest.advanceTimersByTime(1);
 
-    expect(result.ok).toBe(false);
-    expect(result.details.status).toBe("timeout");
-    expect(result.details.keptSurface).toBe(true);
-    expect(result.contentText).toContain("Surface left open at surface:7");
-    expect(deps.closeCalls).toBe(0);
+      expect(deps.browserSignal?.aborted).toBe(true);
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      expect(result.details.status).toBe("timeout");
+      expect(result.details.keptSurface).toBe(true);
+      expect(result.contentText).toContain("Surface left open at surface:7");
+      expect(result.details.blocker).toMatchObject({ code: "consult_timeout" });
+      expect(deps.browserSignal?.reason).toBeInstanceOf(Error);
+      expect((deps.browserSignal?.reason as Error).name).toBe("TimeoutError");
+      expect(deps.closeCalls).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test("returns structured login blocker details without pretending success", async () => {

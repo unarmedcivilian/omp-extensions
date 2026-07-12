@@ -640,7 +640,6 @@ describe("cmux page adapter", () => {
 
     const result = await runChatGptProConsult({
       prompt: "Reply with exactly: omp smoke ok",
-      timeoutMs: 20_000,
     }, {
       createBrowser: ({ signal, deadline, lifecycle }) => createCmuxBrowserAdapter({
         transport,

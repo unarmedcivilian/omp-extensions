@@ -13,7 +13,6 @@ export interface ChatGptProConsultParams {
   prompt: string;
   zipPath?: string;
   thread?: ChatGptProThread;
-  timeoutMs?: number;
   keepSurface?: boolean;
   signal?: AbortSignal;
 }
@@ -49,6 +48,7 @@ export interface ConsultLifecycle {
 }
 
 export interface ChatGptProConsultDeps {
+  createDeadline?: typeof createConsultDeadline;
   createBrowser?: (options: {
     signal?: AbortSignal;
     deadline: ConsultDeadline;
@@ -108,7 +108,7 @@ export interface ConsultCommandResult {
   error?: unknown;
 }
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const CONSULT_TIMEOUT_MS = 120 * 60_000;
 const MAX_MODE_TIMEOUT_MS = 15_000;
 const MIN_MODE_TIMEOUT_MS = 1_000;
 const READ_RESERVE_MS = 5_000;
@@ -136,8 +136,8 @@ export async function runChatGptProConsult(
   const prompt = params.prompt.trim();
   if (!prompt) throw new Error("prompt is required");
 
-  const signal = params.signal;
-  throwIfAborted(signal);
+  const callerSignal = params.signal;
+  throwIfAborted(callerSignal);
 
   const thread = params.thread ?? "new";
   let zipPath: string | undefined;
@@ -147,8 +147,15 @@ export async function runChatGptProConsult(
     return errorResult(error, thread, false, undefined);
   }
 
-  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const deadline = createConsultDeadline(timeoutMs, deps.now ?? (() => new Date()));
+  const deadlineController = new AbortController();
+  const deadline = (deps.createDeadline ?? createConsultDeadline)(
+    CONSULT_TIMEOUT_MS,
+    deps.now ?? (() => new Date()),
+    error => deadlineController.abort(error),
+  );
+  const operationSignal = callerSignal
+    ? AbortSignal.any([callerSignal, deadlineController.signal])
+    : deadlineController.signal;
   let promptPossiblySubmitted = false;
   const lifecycle: ConsultLifecycle = {
     markPromptSubmitted() {
@@ -157,7 +164,7 @@ export async function runChatGptProConsult(
   };
 
   const browserOptions = {
-    signal,
+    signal: operationSignal,
     deadline,
     lifecycle,
     openLoadTimeoutMs: NEW_THREAD_OPEN_LOAD_TIMEOUT_MS,
@@ -165,8 +172,8 @@ export async function runChatGptProConsult(
     interactionSettleMs: CHATGPT_INTERACTION_SETTLE_MS,
   };
   const browser = deps.createBrowser?.(browserOptions) ?? createCmuxBrowserAdapter(browserOptions);
-  const modeTimeoutMs = Math.min(MAX_MODE_TIMEOUT_MS, Math.max(MIN_MODE_TIMEOUT_MS, Math.floor(timeoutMs / 4)));
-  const waitTimeoutMs = Math.max(MIN_MODE_TIMEOUT_MS, timeoutMs - modeTimeoutMs - READ_RESERVE_MS);
+  const modeTimeoutMs = Math.min(MAX_MODE_TIMEOUT_MS, Math.max(MIN_MODE_TIMEOUT_MS, Math.floor(CONSULT_TIMEOUT_MS / 4)));
+  const waitTimeoutMs = Math.max(MIN_MODE_TIMEOUT_MS, CONSULT_TIMEOUT_MS - modeTimeoutMs - READ_RESERVE_MS);
 
   let currentTarget: SelectedChatGptSurface | undefined;
   if (thread === "current") {
@@ -174,11 +181,11 @@ export async function runChatGptProConsult(
       deadline.throwIfExpired("chatgpt.current_surface");
       currentTarget = await deadline.race(
         "chatgpt.current_surface",
-        raceAbort(browser.requireSelectedChatGptSurface(signal), signal),
+        raceAbort(browser.requireSelectedChatGptSurface(operationSignal), operationSignal),
       );
     } catch (error) {
       await closeOwnedSurfacesQuietly(browser);
-      return isTimeoutOrAbortError(error)
+      return operationSignal.aborted || isTimeoutOrAbortError(error)
         ? errorResult(error, thread, false, browser.primarySurfaceRef())
         : blockedPreflightResult(error, thread);
     }
@@ -197,7 +204,7 @@ export async function runChatGptProConsult(
       modeTimeoutMs,
       waitTimeoutMs,
       deadline,
-      signal,
+      signal: operationSignal,
       zipPath,
     });
 
@@ -327,7 +334,7 @@ async function askWithPreferredProMode(args: {
   modeTimeoutMs: number;
   waitTimeoutMs: number;
   deadline: ConsultDeadline;
-  signal: AbortSignal | undefined;
+  signal: AbortSignal;
   zipPath: string | undefined;
 }): Promise<ConsultCommandResult> {
   const preferred = await askWithMode(args, PREFERRED_PRO_MODE_LABEL);
@@ -344,7 +351,7 @@ async function askWithMode(args: {
   modeTimeoutMs: number;
   waitTimeoutMs: number;
   deadline: ConsultDeadline;
-  signal: AbortSignal | undefined;
+  signal: AbortSignal;
   zipPath: string | undefined;
 }, modeLabel: string): Promise<ConsultCommandResult> {
   const request: ChatGptAskArgs = {
@@ -421,19 +428,28 @@ function isPositiveCount(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-export function createConsultDeadline(timeoutMs: number, now: () => Date): ConsultDeadline {
+export function createConsultDeadline(
+  timeoutMs: number,
+  now: () => Date,
+  onExpire?: (error: Error) => void,
+): ConsultDeadline {
   const expiresAt = now().getTime() + timeoutMs;
   const remainingMs = () => Math.max(0, expiresAt - now().getTime());
+  const expire = (operation: string): Error => {
+    const error = createTimeoutError(operation);
+    onExpire?.(error);
+    return error;
+  };
 
   return {
     remainingMs,
     throwIfExpired(operation: string) {
-      if (remainingMs() <= 0) throw createTimeoutError(operation);
+      if (remainingMs() <= 0) throw expire(operation);
     },
     async race<T>(operation: string, promise: Promise<T>): Promise<T> {
       this.throwIfExpired(operation);
       const timeout = Promise.withResolvers<never>();
-      const timer = setTimeout(() => timeout.reject(createTimeoutError(operation)), remainingMs());
+      const timer = setTimeout(() => timeout.reject(expire(operation)), remainingMs());
 
       try {
         return await Promise.race([promise, timeout.promise]);
@@ -446,13 +462,13 @@ export function createConsultDeadline(timeoutMs: number, now: () => Date): Consu
 
 async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (!signal) return await promise;
-  throwIfAborted(signal);
 
   const aborted = Promise.withResolvers<never>();
-  const onAbort = () => aborted.reject(createAbortError());
+  const onAbort = () => aborted.reject(abortErrorFromSignal(signal));
   signal.addEventListener("abort", onAbort, { once: true });
 
   try {
+    throwIfAborted(signal);
     return await Promise.race([promise, aborted.promise]);
   } finally {
     signal.removeEventListener("abort", onAbort);
@@ -460,7 +476,13 @@ async function raceAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw createAbortError();
+  if (!signal?.aborted) return;
+  throw abortErrorFromSignal(signal);
+}
+
+function abortErrorFromSignal(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  return reason instanceof Error ? reason : createAbortError();
 }
 
 function createAbortError(): Error {
