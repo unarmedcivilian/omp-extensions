@@ -31,7 +31,6 @@ interface ConsultToolParams {
   prompt: string;
   zip_path?: string;
   thread?: "new" | "current";
-  timeout_ms?: number;
   keep_surface?: boolean;
 }
 
@@ -175,11 +174,7 @@ describe("ChatGPT Pro consult extension", () => {
     });
     expect(tool.parameters.shape?.thread?.description).toContain("fresh ChatGPT thread");
     expect(tool.parameters.shape?.thread?.defaultValue).toBeUndefined();
-    expect(tool.parameters.shape?.timeout_ms).toMatchObject({
-      kind: "number",
-      isOptional: true,
-    });
-    expect(tool.parameters.shape?.timeout_ms?.description).toContain("milliseconds");
+    expect(tool.parameters.shape).not.toHaveProperty("timeout_ms");
     expect(tool.parameters.shape?.keep_surface).toMatchObject({
       kind: "boolean",
       isOptional: true,
@@ -213,7 +208,6 @@ describe("ChatGPT Pro consult extension", () => {
         prompt: "Explain the tradeoff.",
         zip_path: "/tmp/context.zip",
         thread: "current",
-        timeout_ms: 45_000,
         keep_surface: true,
       },
       signal,
@@ -223,15 +217,37 @@ describe("ChatGPT Pro consult extension", () => {
     expect(calls[0]).toMatchObject({
       prompt: "Explain the tradeoff.",
       thread: "current",
-      timeoutMs: 45_000,
       keepSurface: true,
       zipPath: "/tmp/context.zip",
     });
+    expect(calls[0]).not.toHaveProperty("timeoutMs");
     expect(calls[0]?.signal).toBe(signal);
     expect(response.content).toEqual([{ type: "text", text: "Answer text" }]);
     expect(response.details).toBe(details);
     expect(response.details).not.toHaveProperty("contentText");
     expect(response.isError).toBeUndefined();
+  });
+
+  test("execute rejects a stale own timeout_ms input before invoking consult", async () => {
+    const fake = makeFakePi();
+    const calls: ChatGptProConsultParams[] = [];
+    const extension = createChatGptProConsultExtension({
+      consult: async params => {
+        calls.push(params);
+        throw new Error("consult fake should not be called");
+      },
+    });
+    const staleInput = {
+      prompt: "Use the obsolete timeout.",
+      timeout_ms: 45_000,
+    } as unknown as ConsultToolParams;
+
+    extension(fake.api);
+
+    await expect(fake.tools[0]!.execute("tool-call-stale-timeout", staleInput)).rejects.toThrow(
+      "timeout_ms is not supported; ChatGPT Pro consults use a fixed 120-minute limit.",
+    );
+    expect(calls).toHaveLength(0);
   });
 
   test("execute maps failed consults to tool errors and preserves blocker details", async () => {

@@ -32,7 +32,6 @@ export function createChatGptProConsultExtension(
         .enum(["new", "current"])
         .optional()
         .describe("Use a fresh ChatGPT thread or the selected/current ChatGPT surface."),
-      timeout_ms: z.number().optional().describe("Maximum time to wait for the consult, in milliseconds."),
       keep_surface: z.boolean().optional().describe("Keep the cmux browser surface open after the consult."),
     });
 
@@ -43,11 +42,16 @@ export function createChatGptProConsultExtension(
         "Submit one explicit prompt to ChatGPT Pro through a visible cmux browser session and return the Markdown response.",
       parameters: ConsultParams,
       async execute(_toolCallId, params, signal): Promise<AgentToolResult<ChatGptProConsultDetails>> {
+        if (Object.prototype.hasOwnProperty.call(params, "timeout_ms")) {
+          throw new Error(
+            "timeout_ms is not supported; ChatGPT Pro consults use a fixed 120-minute limit.",
+          );
+        }
+
         const result = await consult({
           prompt: params.prompt,
           zipPath: params.zip_path,
           thread: params.thread,
-          timeoutMs: params.timeout_ms,
           keepSurface: params.keep_surface,
           signal,
         });
