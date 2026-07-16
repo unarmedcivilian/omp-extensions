@@ -36,7 +36,7 @@ export type ScheduleConsultHeartbeat = (
 
 export interface ChatGptProConsultParams {
   prompt: string;
-  zipPath?: string;
+  zipPath?: string | null;
   thread?: ChatGptProThread;
   keepSurface?: boolean;
   signal?: AbortSignal;
@@ -173,10 +173,11 @@ export async function runChatGptProConsult(
   const prompt = params.prompt.trim();
   if (!prompt) throw new Error("prompt is required");
 
-  const callerSignal = params.signal;
-  throwIfAborted(callerSignal);
-
   const thread = params.thread ?? "new";
+  const callerSignal = params.signal;
+  if (callerSignal?.aborted) {
+    return operationAbortResult(abortErrorFromSignal(callerSignal), "caller", thread, false, undefined);
+  }
   let zipPath: string | undefined;
   try {
     zipPath = normalizeZipPath(params.zipPath);
@@ -208,7 +209,13 @@ export async function runChatGptProConsult(
   try {
     progress.update("preparing", "Preparing ChatGPT Pro consult…");
     if (operationSignal.aborted) {
-      return errorResult(abortErrorFromSignal(operationSignal), thread, false, undefined);
+      return operationAbortResult(
+        abortErrorFromSignal(operationSignal),
+        operationAbortSource(operationSignal, deadlineController.signal),
+        thread,
+        false,
+        undefined,
+      );
     }
 
     let promptPossiblySubmitted = false;
@@ -245,11 +252,25 @@ export async function runChatGptProConsult(
           raceAbort(activeBrowser.requireSelectedChatGptSurface(operationSignal), operationSignal),
         );
       } catch (error) {
-        const abortReason = operationSignal.aborted ? abortErrorFromSignal(operationSignal) : undefined;
         await closeOwnedSurfacesQuietly(activeBrowser);
-        return abortReason !== undefined || isTimeoutOrAbortError(error)
-          ? errorResult(abortReason ?? error, thread, false, activeBrowser.primarySurfaceRef())
-          : blockedPreflightResult(error, thread);
+        let failure = error;
+        try {
+          deadline.throwIfExpired("chatgpt.current_surface");
+        } catch (deadlineError) {
+          failure = deadlineError;
+        }
+        if (operationSignal.aborted) {
+          return operationAbortResult(
+            abortErrorFromSignal(operationSignal),
+            operationAbortSource(operationSignal, deadlineController.signal),
+            thread,
+            false,
+            activeBrowser.primarySurfaceRef(),
+          );
+        }
+        return isTimeoutOrAbortError(failure)
+          ? errorResult(failure, thread, false, activeBrowser.primarySurfaceRef())
+          : blockedPreflightResult(failure, thread);
       }
     }
 
@@ -284,13 +305,31 @@ export async function runChatGptProConsult(
       });
 
       const submitted = promptPossiblySubmitted || hasSubmittedPrompt(result);
+      if (!result.ok && operationSignal.aborted) {
+        if (!submitted) await closeOwnedSurfacesQuietly(activeBrowser);
+        return operationAbortResult(
+          abortErrorFromSignal(operationSignal),
+          operationAbortSource(operationSignal, deadlineController.signal),
+          thread,
+          submitted,
+          activeBrowser.primarySurfaceRef(),
+        );
+      }
       const keptSurface = shouldLeaveSurfaceOpen(result, submitted, params.keepSurface === true);
       if (!keptSurface) await closeOwnedSurfacesQuietly(activeBrowser);
       return mapCommandResult(result, thread, keptSurface, activeBrowser.primarySurfaceRef());
     } catch (error) {
       const submitted = promptPossiblySubmitted || (result ? hasSubmittedPrompt(result) : false);
       if (!submitted) await closeOwnedSurfacesQuietly(activeBrowser);
-      return errorResult(error, thread, submitted, activeBrowser.primarySurfaceRef());
+      return operationSignal.aborted
+        ? operationAbortResult(
+            abortErrorFromSignal(operationSignal),
+            operationAbortSource(operationSignal, deadlineController.signal),
+            thread,
+            submitted,
+            activeBrowser.primarySurfaceRef(),
+          )
+        : errorResult(error, thread, submitted, activeBrowser.primarySurfaceRef());
     }
   } finally {
     progress.stop();
@@ -376,8 +415,17 @@ function mapCommandResult(
   surfaceRef: string | undefined,
 ): ChatGptProConsultResult {
   const markdown = result.ok ? String(result.output_text ?? "") : "";
-  const blocker = normalizeBlocker(result.blocker, keptSurface ? surfaceRef : undefined);
-  const contentText = result.ok ? markdown : blockerText(blocker, errorMessage(result.error) ?? result.status);
+  const sdkAbort = !result.ok && errorName(result.error) === "AbortError";
+  const failureMessage = errorMessage(result.error) ?? result.status;
+  const blocker: ConsultBlocker | undefined = sdkAbort
+    ? {
+        kind: "unknown",
+        code: "consult_error",
+        message: failureMessage,
+        surfaceRef: keptSurface ? surfaceRef : undefined,
+      }
+    : normalizeBlocker(result.blocker, keptSurface ? surfaceRef : undefined);
+  const contentText = result.ok ? markdown : blockerText(blocker, failureMessage);
 
   return {
     ok: result.ok,
@@ -385,7 +433,7 @@ function mapCommandResult(
     contentText,
     details: {
       ok: result.ok,
-      status: result.status,
+      status: sdkAbort ? "error" : result.status,
       warnings: normalizeWarnings(result.warnings),
       thread,
       surfaceRef,
@@ -414,6 +462,53 @@ export function blockedPreflightResult(error: unknown, thread: ChatGptProThread)
       keptSurface: false,
       blocker,
       error: { message },
+    },
+  };
+}
+
+function operationAbortSource(
+  operationSignal: AbortSignal,
+  deadlineSignal: AbortSignal,
+): "caller" | "deadline" {
+  return deadlineSignal.aborted && operationSignal.reason === deadlineSignal.reason
+    ? "deadline"
+    : "caller";
+}
+
+function operationAbortResult(
+  error: unknown,
+  source: "caller" | "deadline",
+  thread: ChatGptProThread,
+  submitted: boolean,
+  surfaceRef: string | undefined,
+): ChatGptProConsultResult {
+  if (source === "deadline") {
+    return errorResult(error, thread, submitted, surfaceRef);
+  }
+
+  const reason = errorMessage(error);
+  const phase = submitted ? "after prompt submission" : "before prompt submission";
+  const message = `ChatGPT Pro consult was cancelled by the caller ${phase}.${reason ? ` Reason: ${reason}` : ""}`;
+  const blocker: ConsultBlocker = {
+    kind: "unknown",
+    code: "consult_aborted",
+    message,
+    surfaceRef: submitted ? surfaceRef : undefined,
+  };
+
+  return {
+    ok: false,
+    markdown: "",
+    contentText: blockerText(blocker, message),
+    details: {
+      ok: false,
+      status: "aborted",
+      warnings: [],
+      thread,
+      surfaceRef,
+      keptSurface: submitted,
+      blocker,
+      error: { name: errorName(error), message: reason ?? String(error) },
     },
   };
 }
@@ -564,10 +659,10 @@ function blockerMessage(result: ConsultCommandResult): string | undefined {
   return typeof message === "string" ? message : undefined;
 }
 
-function normalizeZipPath(zipPath: string | undefined): string | undefined {
-  if (zipPath === undefined) return undefined;
+function normalizeZipPath(zipPath: string | null | undefined): string | undefined {
+  if (zipPath == null) return undefined;
   const trimmed = zipPath.trim();
-  if (!trimmed) throw new Error("zip_path must not be empty");
+  if (!trimmed) return undefined;
   if (!/\.zip$/i.test(trimmed)) throw new Error("zip_path must point to a .zip file");
   return resolve(trimmed);
 }

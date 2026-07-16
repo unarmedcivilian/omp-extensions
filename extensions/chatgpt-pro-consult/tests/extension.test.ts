@@ -14,11 +14,13 @@ interface Chain {
   kind: string;
   description?: string;
   isOptional?: boolean;
+  isNullable?: boolean;
   defaultValue?: unknown;
   shape?: Record<string, Chain>;
   values?: readonly string[];
   describe(text: string): Chain;
   optional(): Chain;
+  nullable(): Chain;
   default(value: unknown): Chain;
 }
 
@@ -32,7 +34,7 @@ interface ZLike {
 
 interface ConsultToolParams {
   prompt: string;
-  zip_path?: string;
+  zip_path?: string | null;
   thread?: "new" | "current";
   keep_surface?: boolean;
 }
@@ -66,6 +68,10 @@ function chain(kind: string, extra: Partial<Chain> = {}): Chain {
     },
     optional() {
       this.isOptional = true;
+      return this;
+    },
+    nullable() {
+      this.isNullable = true;
       return this;
     },
     default(value: unknown) {
@@ -169,6 +175,7 @@ describe("ChatGPT Pro consult extension", () => {
     expect(tool.parameters.shape?.zip_path).toMatchObject({
       kind: "string",
       isOptional: true,
+      isNullable: true,
     });
     expect(tool.parameters.shape?.zip_path?.description).toContain("ZIP");
     expect(tool.parameters.shape?.thread).toMatchObject({

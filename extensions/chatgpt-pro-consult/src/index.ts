@@ -46,8 +46,9 @@ export function createChatGptProConsultExtension(
       prompt: z.string().describe("Prompt to submit to ChatGPT Pro."),
       zip_path: z
         .string()
+        .nullable()
         .optional()
-        .describe("Absolute or relative path to one local ZIP file to upload before submitting the prompt."),
+        .describe("Optional path to one local ZIP file to upload; omit, pass null, or pass blank to skip the upload."),
       thread: z
         .enum(["new", "current"])
         .optional()

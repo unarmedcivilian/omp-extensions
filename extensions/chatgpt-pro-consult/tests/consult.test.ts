@@ -21,6 +21,7 @@ function depsReturning(
   options: {
     currentError?: Error;
     currentSurface?: () => Promise<{ tabId: string; surface: string; url: string }>;
+    closeOwnedSurfaces?: () => Promise<void>;
     deadlineMs?: number;
     markSubmittedImmediately?: boolean;
     now?: () => Date;
@@ -84,6 +85,7 @@ function depsReturning(
         primarySurfaceRef: () => "surface:7",
         closeOwnedSurfaces: async () => {
           closeCalls += 1;
+          await options.closeOwnedSurfaces?.();
         },
       };
     },
@@ -146,6 +148,64 @@ describe("runChatGptProConsult", () => {
     expect(result.ok).toBe(true);
     expect(result.markdown).toBe("omp smoke ok");
     expect(result.contentText).toBe("omp smoke ok");
+  });
+
+  test("returns a structured abort for an already-aborted caller signal", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled before execute");
+    controller.abort(reason);
+    const deps = depsReturning({ ok: true, status: "ok", output_text: "should not run", warnings: [] });
+
+    const outcome = await runChatGptProConsult({
+      prompt: "Hi",
+      signal: controller.signal,
+    }, deps).then(
+      result => ({ result }),
+      error => ({ error }),
+    );
+
+    expect(outcome).toHaveProperty("result");
+    if ("error" in outcome) return;
+    expect(outcome.result.details.status).toBe("aborted");
+    expect(outcome.result.details.blocker).toMatchObject({ code: "consult_aborted" });
+    expect(outcome.result.details.keptSurface).toBe(false);
+    expect(deps.calls).toEqual([]);
+    expect(deps.closeCalls).toBe(0);
+  });
+
+  test("does not mistake a caller TimeoutError reason for the internal deadline", async () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException("caller-side timeout", "TimeoutError"));
+    const deps = depsReturning({ ok: true, status: "ok", output_text: "should not run", warnings: [] });
+
+    const result = await runChatGptProConsult({
+      prompt: "Hi",
+      signal: controller.signal,
+    }, deps);
+
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.blocker).toMatchObject({ code: "consult_aborted" });
+    expect(deps.calls).toEqual([]);
+  });
+
+  test("treats a blank ZIP path as no upload", async () => {
+    const deps = depsReturning({ ok: true, status: "ok", output_text: "done", warnings: [] });
+
+    const result = await runChatGptProConsult({ prompt: "Hi", zipPath: "   " }, deps);
+
+    expect(result.ok).toBe(true);
+    expect(deps.calls).toHaveLength(1);
+    expect(deps.calls[0]).not.toHaveProperty("method");
+  });
+
+  test("treats a null ZIP path as no upload", async () => {
+    const deps = depsReturning({ ok: true, status: "ok", output_text: "done", warnings: [] });
+
+    const result = await runChatGptProConsult({ prompt: "Hi", zipPath: null }, deps);
+
+    expect(result.ok).toBe(true);
+    expect(deps.calls).toHaveLength(1);
+    expect(deps.calls[0]).not.toHaveProperty("method");
   });
 
   test("emits preparing, submitting, and possible-submission waiting snapshots", async () => {
@@ -214,7 +274,8 @@ describe("runChatGptProConsult", () => {
     }, deps);
 
     expect(result.ok).toBe(false);
-    expect(result.details.status).toBe("error");
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.blocker).toMatchObject({ code: "consult_aborted" });
     expect(snapshots.map(snapshot => snapshot.phase)).toEqual(["preparing"]);
     expect(deps.selectedCalls).toBe(0);
     expect(deps.calls).toEqual([]);
@@ -244,7 +305,8 @@ describe("runChatGptProConsult", () => {
     }, deps);
 
     expect(result.ok).toBe(false);
-    expect(result.details.status).toBe("error");
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.blocker).toMatchObject({ code: "consult_aborted" });
     expect(snapshots.map(snapshot => snapshot.phase)).toEqual(["preparing"]);
     expect(deps.selectedCalls).toBe(0);
     expect(deps.calls).toEqual([]);
@@ -689,10 +751,41 @@ describe("runChatGptProConsult", () => {
     expect(deps.calls).toEqual([]);
     expect(deps.closeCalls).toBe(1);
     expect(result.ok).toBe(false);
-    expect(result.details.status).toBe("error");
-    expect(result.details.blocker).toMatchObject({ code: "consult_error" });
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.blocker).toMatchObject({ code: "consult_aborted" });
     expect(result.details.blocker).not.toMatchObject({ code: "current_chatgpt_surface_missing" });
     expect(result.details.error).toEqual({ name: "Error", message: "cancelled" });
+  });
+
+  test("classifies a caller abort that arrives during current-surface cleanup", async () => {
+    const controller = new AbortController();
+    const cleanupStarted = Promise.withResolvers<void>();
+    const releaseCleanup = Promise.withResolvers<void>();
+    const deps = depsReturning(
+      { ok: true, status: "ok", output_text: "should not run", warnings: [] },
+      {
+        currentError: new Error("surface closed"),
+        closeOwnedSurfaces: async () => {
+          cleanupStarted.resolve();
+          await releaseCleanup.promise;
+        },
+      },
+    );
+
+    const running = runChatGptProConsult({
+      prompt: "Continue",
+      thread: "current",
+      signal: controller.signal,
+    }, deps);
+    await cleanupStarted.promise;
+    controller.abort(new Error("cancelled during cleanup"));
+    releaseCleanup.resolve();
+
+    const result = await running;
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.blocker).toMatchObject({ code: "consult_aborted" });
+    expect(result.details.keptSurface).toBe(false);
+    expect(deps.closeCalls).toBe(1);
   });
 
   test("uses the deadline reason when current preflight rejects as the deadline aborts", async () => {
@@ -724,6 +817,38 @@ describe("runChatGptProConsult", () => {
       message: timeoutError.message,
     });
     expect(result.details.error).toEqual({ name: "TimeoutError", message: timeoutError.message });
+  });
+
+  test("classifies a deadline crossed during current-surface cleanup as a timeout", async () => {
+    let nowMs = 0;
+    const cleanupStarted = Promise.withResolvers<void>();
+    const releaseCleanup = Promise.withResolvers<void>();
+    const deps = depsReturning(
+      { ok: true, status: "ok", output_text: "should not run", warnings: [] },
+      {
+        currentError: new Error("surface closed"),
+        deadlineMs: 1,
+        now: () => new Date(nowMs),
+        closeOwnedSurfaces: async () => {
+          cleanupStarted.resolve();
+          await releaseCleanup.promise;
+        },
+      },
+    );
+
+    const running = runChatGptProConsult({
+      prompt: "Continue",
+      thread: "current",
+    }, deps);
+    await cleanupStarted.promise;
+    nowMs = 2;
+    releaseCleanup.resolve();
+
+    const result = await running;
+    expect(result.details.status).toBe("timeout");
+    expect(result.details.blocker).toMatchObject({ code: "consult_timeout" });
+    expect(result.details.keptSurface).toBe(false);
+    expect(deps.closeCalls).toBe(1);
   });
 
   test("does not preflight current-thread surface when its deadline is already expired", async () => {
@@ -837,7 +962,8 @@ describe("runChatGptProConsult", () => {
     }, deps);
 
     expect(result.ok).toBe(false);
-    expect(result.details.status).toBe("error");
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.blocker).toMatchObject({ code: "consult_aborted" });
     expect(deps.calls).toEqual([]);
     expect(heartbeat.stopCalls).toBe(1);
   });
@@ -993,11 +1119,90 @@ describe("runChatGptProConsult", () => {
 
     const result = await running;
     expect(result.ok).toBe(false);
-    expect(result.details.status).toBe("error");
-    expect(heartbeat.stopCalls).toBe(1);
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.blocker).toMatchObject({ code: "consult_aborted" });
+    expect(result.details.keptSurface).toBe(true);
+    expect(result.contentText).toContain("cancelled by the caller after prompt submission");
+    expect(result.contentText).toContain("Surface left open at surface:7");
     const snapshotCount = snapshots.length;
     heartbeat.fire();
     expect(snapshots).toHaveLength(snapshotCount);
+  });
+
+  test("keeps an SDK AbortError distinct when the caller signal is not aborted", async () => {
+    const sdkAbort = new DOMException("The operation was aborted.", "AbortError");
+    const deps = depsReturning(async () => {
+      throw sdkAbort;
+    }, {
+      markSubmittedImmediately: true,
+    });
+
+    const result = await runChatGptProConsult({ prompt: "Hi" }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.details.status).toBe("error");
+    expect(result.details.blocker).toMatchObject({ code: "consult_error" });
+    expect(result.details.keptSurface).toBe(true);
+  });
+
+  test("normalizes a structured SDK AbortError result without caller cancellation", async () => {
+    const sdkResult = {
+      ok: false,
+      status: "partial",
+      warnings: ["SDK wait was interrupted."],
+      context: { turnCount: 1 },
+      error: { name: "AbortError", message: "The browser operation was aborted." },
+    };
+    const deps = depsReturning(sdkResult, {
+      markSubmittedImmediately: true,
+    });
+
+    const result = await runChatGptProConsult({ prompt: "Hi" }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.details.status).toBe("error");
+    expect(result.details.blocker).toMatchObject({
+      code: "consult_error",
+      message: "The browser operation was aborted.",
+    });
+    expect(result.details.keptSurface).toBe(true);
+    expect(result.details.warnings).toEqual(["SDK wait was interrupted."]);
+    expect(result.details.context).toEqual({ turnCount: 1 });
+    expect(result.details.raw).toBe(sdkResult);
+  });
+
+  test("caller cancellation wins when the SDK resolves an AbortError from the same signal", async () => {
+    const controller = new AbortController();
+    const listenerReady = Promise.withResolvers<void>();
+    const sdkResult = {
+      ok: false,
+      status: "partial",
+      context: { turnCount: 1 },
+      error: { name: "AbortError", message: "The browser operation was aborted." },
+    };
+    const sdkCompletion = Promise.withResolvers<typeof sdkResult>();
+    const deps = depsReturning({ ok: true, status: "ok", output_text: "should not run", warnings: [] });
+    deps.createChatGptClient = () => ({
+      ask: () => {
+        deps.markPromptSubmitted();
+        deps.browserSignal?.addEventListener("abort", () => sdkCompletion.resolve(sdkResult), { once: true });
+        listenerReady.resolve();
+        return sdkCompletion.promise;
+      },
+      runPlan: () => Promise.resolve(sdkResult),
+    });
+
+    const running = runChatGptProConsult({
+      prompt: "Hi",
+      signal: controller.signal,
+    }, deps);
+    await listenerReady.promise;
+    controller.abort(new Error("cancelled while waiting"));
+
+    const result = await running;
+    expect(result.details.status).toBe("aborted");
+    expect(result.details.blocker).toMatchObject({ code: "consult_aborted" });
+    expect(result.details.keptSurface).toBe(true);
   });
 
   test("stops the heartbeat exactly once when a progress callback throws", async () => {
